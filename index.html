@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Too Many Heroes - 2D Sandbox</title>
+    <title>Too Many Heroes - Base HP Tanking</title>
     <style>
         body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; line-height: 1.4; }
         .setup-panel { display: flex; gap: 20px; margin-bottom: 15px; }
@@ -11,14 +11,11 @@
         .control-row { margin-top: 8px; }
         select, button { background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 8px 12px; font-family: monospace; font-weight: bold; cursor: pointer; }
         button:hover { background: #002200; }
-        
-        /* 2D Grid Setup */
         .game-layout { display: flex; gap: 30px; margin-top: 15px; }
         .grid-board { display: grid; grid-template-columns: repeat(6, 60px); grid-template-rows: repeat(6, 60px); gap: 4px; background: #222; padding: 6px; border-radius: 4px; border: 2px solid #444; }
         .grid-cell { background: #111; border: 1px solid #333; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; color: #444; position: relative; }
         .p1-unit { background: #004444 !important; border-color: #00ffff !important; color: #00ffff !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
         .p2-unit { background: #442200 !important; border-color: #ff9800 !important; color: #ff9800 !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
-        
         .log-box { background: #000; border: 1px solid #00ff00; padding: 15px; height: 350px; overflow-y: auto; font-size: 13px; flex-grow: 1; }
         .clash-text { color: #ff3333; font-weight: bold; }
         .hit-text { color: #ffff00; }
@@ -81,7 +78,6 @@
             'Knight':    { hp: 120, melee: 25, range: 0 }
         };
 
-        // State Tracking (X, Y matrices mapping from 0 to 5)
         let p1Party = [], p2Party = [];
         let p1X = 0, p1Y = 2;
         let p2X = 5, p2Y = 3;
@@ -91,7 +87,8 @@
             let roles = Object.keys(HERO_TEMPLATES), party = [];
             for(let i=0; i<4; i++) {
                 let r = roles[Math.floor(Math.random() * roles.length)];
-                party.push({ role: r, ...HERO_TEMPLATES[r] });
+                // Store BOTH current hp and permanent baseHp reference
+                party.push({ role: r, hp: HERO_TEMPLATES[r].hp, baseHp: HERO_TEMPLATES[r].hp, melee: HERO_TEMPLATES[r].melee, range: HERO_TEMPLATES[r].range });
             }
             return party;
         }
@@ -99,7 +96,7 @@
         function renderRoster(party, id) {
             const el = document.getElementById(id);
             if (!party.length) { el.innerHTML = "<span style='color:#ff3333;'>WIPED OUT</span>"; return; }
-            el.innerHTML = party.map(h => `<div class="hero-chip"><b>${h.role}</b> (❤${h.hp})</div>`).join('');
+            el.innerHTML = party.map(h => `<div class="hero-chip"><b>${h.role}</b> (❤${h.hp}/${h.baseHp})</div>`).join('');
         }
 
         function createGridBoard() {
@@ -111,12 +108,8 @@
                     cell.className = 'grid-cell';
                     cell.id = `cell-${x}-${y}`;
                     cell.innerText = `(${x},${y})`;
-                    
-                    if(x === p1X && y === p1Y && p1Party.length) {
-                        cell.innerHTML = '<div class="p1-unit">P1</div>';
-                    } else if(x === p2X && y === p2Y && p2Party.length) {
-                        cell.innerHTML = '<div class="p2-unit">P2</div>';
-                    }
+                    if(x === p1X && y === p1Y && p1Party.length) cell.innerHTML = '<div class="p1-unit">P1</div>';
+                    else if(x === p2X && y === p2Y && p2Party.length) cell.innerHTML = '<div class="p2-unit">P2</div>';
                     board.appendChild(cell);
                 }
             }
@@ -139,28 +132,26 @@
             if(direction === 'SOUTH') ny++;
             if(direction === 'EAST')  nx++;
             if(direction === 'WEST')  nx--;
-            // Keep inside 6x6 boundaries
-            nx = Math.max(0, Math.min(5, nx));
-            ny = Math.max(0, Math.min(5, ny));
-            return { x: nx, y: ny };
+            return { x: Math.max(0, Math.min(5, nx)), y: Math.max(0, Math.min(5, ny)) };
         }
 
-        function dealSpilloverDamage(party, totalDamage, logBox) {
+        function dealSpilloverDamage(party, totalDamage, logBox, label) {
             let remainingDmg = totalDamage;
             while(remainingDmg > 0 && party.length > 0) {
-                party.sort((a, b) => b.hp - a.hp);
+                // EXPLICIT FIXED ORDER: Sort by baseHp descending so natural tanks always draw focus first
+                party.sort((a, b) => b.baseHp - a.baseHp);
                 let tank = party[0];
+
                 if(tank.hp > remainingDmg) {
                     tank.hp -= remainingDmg;
-                    logBox.innerHTML += `<span class="hit-text"> -> ${tank.role} takes ${remainingDmg} damage (${tank.hp} left).</span><br>`;
+                    logBox.innerHTML += `<span class="hit-text"> -> [${label}] ${tank.role} tanks the hit! Takes ${remainingDmg} damage (${tank.hp}/${tank.baseHp} HP remaining).</span><br>`;
                     remainingDmg = 0;
                 } else {
                     remainingDmg -= tank.hp;
-                    logBox.innerHTML += `<span class="hit-text" style="color:#ff5555;"> -> ${tank.role} takes ${tank.hp} damage and breaks down!</span><br>`;
-                    party.shift();
+                    logBox.innerHTML += `<span class="hit-text" style="color:#ff5555;"> -> [${label}] ${tank.role} absorbs remaining ${tank.hp} damage and falls unconscious!</span><br>`;
+                    party.shift(); // Remove fallen hero
                 }
             }
-            return party.length === 0;
         }
 
         function executeSimultaneousTurn2D() {
@@ -182,45 +173,41 @@
 
             for (let step = 1; step <= 3; step++) {
                 let moved = false;
-
-                // Precompute positions
                 let p1Next = p1Steps > 0 ? getNextStep(p1X, p1Y, p1Dir) : { x: p1X, y: p1Y };
                 let p2Next = p2Steps > 0 ? getNextStep(p2X, p2Y, p2Dir) : { x: p2X, y: p2Y };
 
-                // Handle Step Collisions
                 if(p1Steps > 0) {
                     if(p1Next.x === p2X && p1Next.y === p2Y) {
                         logBox.innerHTML += `<span class="clash-text">[Collision] P1 blocked at (${p1X},${p1Y}) by P2!</span><br>`;
                         p1Steps = 0;
-                    } else {
-                        p1X = p1Next.x; p1Y = p1Next.y; p1Steps--; moved = true;
-                    }
+                    } else { p1X = p1Next.x; p1Y = p1Next.y; p1Steps--; moved = true; }
                 }
 
                 if(p2Steps > 0) {
                     if(p2Next.x === p1X && p2Next.y === p1Y) {
                         logBox.innerHTML += `<span class="clash-text">[Collision] P2 blocked at (${p2X},${p2Y}) by P1!</span><br>`;
                         p2Steps = 0;
-                    } else {
-                        p2X = p2Next.x; p2Y = p2Next.y; p2Steps--; moved = true;
-                    }
+                    } else { p2X = p2Next.x; p2Y = p2Next.y; p2Steps--; moved = true; }
                 }
 
                 if(moved) {
-                    logBox.innerHTML += `Step ${step}: P1 moved to (${p1X},${p1Y}) | P2 moved to (${p2X},${p2Y})<br>`;
+                    logBox.innerHTML += `Step ${step}: P1 at (${p1X},${p1Y}) | P2 at (${p2X},${p2Y})<br>`;
                     createGridBoard();
                 }
 
-                // Manhattan Distance evaluation
                 let dist = Math.abs(p1X - p2X) + Math.abs(p1Y - p2Y);
 
                 if(dist === 2) {
                     logBox.innerHTML += `<b>[Ranged Intercept Engaged at Step ${step}!]</b><br>`;
-                    let p1Dmg = Math.round(p1Party.reduce((s, h) => s + h.range, 0) * p2DmgMod);
-                    let p2Dmg = Math.round(p2Party.reduce((s, h) => s + h.range, 0) * p1DmgMod);
+                    let p1Dmg = (p1Order === 'March') ? 0 : Math.round(p1Party.reduce((s, h) => s + h.range, 0) * p2DmgMod);
+                    let p2Dmg = (p2Order === 'March') ? 0 : Math.round(p2Party.reduce((s, h) => s + h.range, 0) * p1DmgMod);
 
-                    if(p1Dmg > 0) { logBox.innerHTML += `P1 shoots for ${p1Dmg} dmg.<br>`; dealSpilloverDamage(p2Party, p1Dmg, logBox); }
-                    if(p2Dmg > 0 && p2Order !== 'March') { logBox.innerHTML += `P2 shoots for ${p2Dmg} dmg.<br>`; dealSpilloverDamage(p1Party, p2Dmg, logBox); }
+                    if(p1Dmg > 0) logBox.innerHTML += `P1 snapshot raw volley: ${p1Dmg} dmg.<br>`;
+                    if(p2Dmg > 0) logBox.innerHTML += `P2 snapshot raw volley: ${p2Dmg} dmg.<br>`;
+
+                    if(p1Dmg > 0) dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
+                    if(p2Dmg > 0) dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
+
                     renderRoster(p1Party, 'p1-roster'); renderRoster(p2Party, 'p2-roster');
                     if(!p1Party.length || !p2Party.length) { matchActive = false; createGridBoard(); return; }
                 }
@@ -230,8 +217,11 @@
                     let p1Dmg = Math.round(p1Party.reduce((s, h) => s + h.melee, 0) * p2DmgMod);
                     let p2Dmg = Math.round(p2Party.reduce((s, h) => s + h.melee, 0) * p1DmgMod);
 
-                    logBox.innerHTML += `P1 strikes for ${p1Dmg} melee dmg.<br>`; dealSpilloverDamage(p2Party, p1Dmg, logBox);
-                    logBox.innerHTML += `P2 strikes for ${p2Dmg} melee dmg.<br>`; dealSpilloverDamage(p1Party, p2Dmg, logBox);
+                    logBox.innerHTML += `P1 snapshot raw strike: ${p1Dmg} dmg.<br>`;
+                    logBox.innerHTML += `P2 snapshot raw strike: ${p2Dmg} dmg.<br>`;
+
+                    dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
+                    dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
                     
                     renderRoster(p1Party, 'p1-roster'); renderRoster(p2Party, 'p2-roster');
                     if(!p1Party.length || !p2Party.length) { matchActive = false; createGridBoard(); return; }
@@ -244,10 +234,7 @@
             if (currentRound >= 4) {
                 logBox.innerHTML += "<br><b>=== 4 ROUNDS COMPLETE. MATCH TERMINATED ===</b>";
                 matchActive = false;
-            } else {
-                currentRound++;
-                document.getElementById('round-indicator').innerText = `Round: ${currentRound} / 4`;
-            }
+            } else { currentRound++; document.getElementById('round-indicator').innerText = `Round: ${currentRound} / 4`; }
             createGridBoard();
             logBox.scrollTop = logBox.scrollHeight;
         }
