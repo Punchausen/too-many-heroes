@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Too Many Heroes - Full 2D Mobility</title>
     <style>
+        /* BASE DESIGN SYSTEM: Styling the tactical terminal */
         body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; line-height: 1.4; }
         .setup-panel { display: flex; gap: 20px; margin-bottom: 15px; }
         .player-card { border: 1px solid #333; background: #1a1a1a; padding: 15px; width: 45%; border-radius: 4px; }
@@ -11,9 +12,13 @@
         .control-row { margin-top: 8px; }
         select, button { background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 8px 12px; font-family: monospace; font-weight: bold; cursor: pointer; }
         button:hover { background: #002200; }
+        
+        /* 2D GRID BOARD GRAPHICS: CSS Grid setup for a clean 6x6 combat field */
         .game-layout { display: flex; gap: 30px; margin-top: 15px; }
         .grid-board { display: grid; grid-template-columns: repeat(6, 60px); grid-template-rows: repeat(6, 60px); gap: 4px; background: #222; padding: 6px; border-radius: 4px; border: 2px solid #444; }
         .grid-cell { background: #111; border: 1px solid #333; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; color: #444; position: relative; }
+        
+        /* FACTION VISUALS: Visual styling separating Player 1 (Cyan) and Player 2 (Orange) tokens */
         .p1-unit { background: #004444 !important; border-color: #00ffff !important; color: #00ffff !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
         .p2-unit { background: #442200 !important; border-color: #ff9800 !important; color: #ff9800 !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
         .log-box { background: #000; border: 1px solid #00ff00; padding: 15px; height: 350px; overflow-y: auto; font-size: 13px; flex-grow: 1; }
@@ -81,6 +86,7 @@
     </div>
 
     <script>
+        /* GAME DATA MANIFEST: Individual character blueprints used to scale the dynamic unit card */
         const HERO_TEMPLATES = {
             'Barbarian': { hp: 100, melee: 40, range: 0 },
             'Elf':       { hp: 50,  melee: 15, range: 25 },
@@ -88,35 +94,41 @@
             'Knight':    { hp: 120, melee: 25, range: 0 }
         };
 
+        /* CORE APPLICATION STATE: Tracking the structural variable values across active rounds */
         let p1Party = [], p2Party = [];
-        let p1X = 0, p1Y = 2;
-        let p2X = 5, p2Y = 3;
+        let p1X = 0, p1Y = 2; // P1 initial spawn coordinates
+        let p2X = 5, p2Y = 3; // P2 initial spawn coordinates
         let currentRound = 1, matchActive = false;
 
+        /* TAVERN RECRUITMENT GENERATOR: Instantiates a cloned deep object of 4 randomized units */
         function rollParty() {
             let roles = Object.keys(HERO_TEMPLATES), party = [];
             for(let i=0; i<4; i++) {
                 let r = roles[Math.floor(Math.random() * roles.length)];
+                // NOTE: 'baseHp' is stored permanently here to serve as the immutable targeting anchor
                 party.push({ role: r, hp: HERO_TEMPLATES[r].hp, baseHp: HERO_TEMPLATES[r].hp, melee: HERO_TEMPLATES[r].melee, range: HERO_TEMPLATES[r].range });
             }
             return party;
         }
 
+        /* RENDERING DOM REFRESHER: Prints character status arrays to their active dashboard layouts */
         function renderRoster(party, id) {
             const el = document.getElementById(id);
             if (!party.length) { el.innerHTML = "<span style='color:#ff3333;'>WIPED OUT</span>"; return; }
             el.innerHTML = party.map(h => `<div class="hero-chip"><b>${h.role}</b> (❤${h.hp}/${h.baseHp})</div>`).join('');
         }
 
+        /* HTML CANVAS/GRID PAINTER: Rebuilds matrix nodes on map updates, maintaining true entity coordinates */
         function createGridBoard() {
             const board = document.getElementById('map-board');
-            board.innerHTML = '';
+            board.innerHTML = ''; // Wipe stale configurations
             for(let y=0; y<6; y++) {
                 for(let x=0; x<6; x++) {
                     let cell = document.createElement('div');
                     cell.className = 'grid-cell';
                     cell.id = `cell-${x}-${y}`;
                     cell.innerText = `(${x},${y})`;
+                    // Overlay custom HTML tags to draw live coordinates
                     if(x === p1X && y === p1Y && p1Party.length) cell.innerHTML = '<div class="p1-unit">P1</div>';
                     else if(x === p2X && y === p2Y && p2Party.length) cell.innerHTML = '<div class="p2-unit">P2</div>';
                     board.appendChild(cell);
@@ -124,6 +136,7 @@
             }
         }
 
+        /* ENGINES INITIALIZER: Fully wipes variables to default and launches round 1 architecture */
         function resetMatch2D() {
             p1Party = rollParty(); p2Party = rollParty();
             p1X = 0; p1Y = 2; p2X = 5; p2Y = 3;
@@ -135,90 +148,108 @@
             createGridBoard();
         }
 
+        /* BOUNDARY PRE-COMPUTATION MATRIX: Predicts prospective tile location step targets */
         function getNextStep(x, y, direction) {
             let nx = x, ny = y;
             if(direction === 'NORTH') ny--;
             if(direction === 'SOUTH') ny++;
             if(direction === 'EAST')  nx++;
             if(direction === 'WEST')  nx--;
+            // Clamping array indexes explicitly between 0 and 5 boundaries to block perimeter escapes
             return { x: Math.max(0, Math.min(5, nx)), y: Math.max(0, Math.min(5, ny)) };
         }
 
+        /* TRUE SPILLOVER DAMAGE RESOLUTION: Deducts incoming health blocks focusing purely on highest base tanks */
         function dealSpilloverDamage(party, totalDamage, logBox, label) {
             let remainingDmg = totalDamage;
             while(remainingDmg > 0 && party.length > 0) {
+                // BUG HUNT SAFETY WARNING: Array MUST sort via immutable 'baseHp' to ensure tanking priority never changes!
                 party.sort((a, b) => b.baseHp - a.baseHp);
                 let tank = party[0];
+
                 if(tank.hp > remainingDmg) {
-                    tank.hp -= remainingDmg;
+                    tank.hp -= remainingDmg; // Damage mitigated safely inside current tank pool bounds
                     logBox.innerHTML += `<span class="hit-text"> -> [${label}] ${tank.role} tanks the hit! Takes ${remainingDmg} damage (${tank.hp}/${tank.baseHp} HP remaining).</span><br>`;
                     remainingDmg = 0;
                 } else {
-                    remainingDmg -= tank.hp;
+                    remainingDmg -= tank.hp; // Tank drops, overflow shifts to next array index iteration
                     logBox.innerHTML += `<span class="hit-text" style="color:#ff5555;"> -> [${label}] ${tank.role} absorbs remaining ${tank.hp} damage and falls unconscious!</span><br>`;
-                    party.shift();
+                    party.shift(); // Remove fallen unit card
                 }
             }
         }
 
+        /* CORE TIMELINE REPLAY PIPELINE: Processes real-time actions slice-by-slice concurrently */
         function executeSimultaneousTurn2D() {
             const logBox = document.getElementById('log');
             if(!matchActive) return;
 
             logBox.innerHTML += `<br><b>=== STARTING ROUND ${currentRound} TIMELINE ===</b><br>`;
             
+            // Read active choices from DOM selectors
             let p1Order = document.getElementById('p1-order').value;
             let p2Order = document.getElementById('p2-order').value;
             let p1Dir = document.getElementById('p1-dir').value;
             let p2Dir = document.getElementById('p2-dir').value;
 
+            // Translate order modes to explicit loop constraints
             const distances = { 'Seek': 1, 'Advance': 2, 'March': 3 };
             let p1Steps = distances[p1Order], p2Steps = distances[p2Order];
 
+            // Setup multipliers relative to specific order profiles
             let p1DmgMod = p1Order === 'Seek' ? 0.75 : (p1Order === 'March' ? 1.5 : 1.0);
             let p2DmgMod = p2Order === 'Seek' ? 0.75 : (p2Order === 'March' ? 1.5 : 1.0);
 
+            // SIMULTANEOUS TIME-SLICE LOOP: Maximum of 3 potential movement increments processed in lockstep
             for (let step = 1; step <= 3; step++) {
                 let moved = false;
                 let p1Next = p1Steps > 0 ? getNextStep(p1X, p1Y, p1Dir) : { x: p1X, y: p1Y };
                 let p2Next = p2Steps > 0 ? getNextStep(p2X, p2Y, p2Dir) : { x: p2X, y: p2Y };
 
-                // Enforce Edge Constraints: If next coordinate is identical to current coordinate, they hit the map perimeter edge
-                if(p1Steps > 0 && p1Next.x === p1X && p1Next.y === p1Y) {
-                    logBox.innerHTML += `<span style="color: #888;">[Edge] P1 hit the boundary map perimeter. Step wasted.</span><br>`;
-                    p1Steps--; 
-                } else if(p1Steps > 0) {
-                    if(p1Next.x === p2X && p1Next.y === p2Y) {
+                // PROCESS PLAYER 1 POSITION SHIFT
+                if(p1Steps > 0) {
+                    // EDGE BLOCK INTERCEPT: Target coordinate is identical to current position, implying wall bounce
+                    if(p1Next.x === p1X && p1Next.y === p1Y) {
+                        logBox.innerHTML += `<span style="color: #888;">[Edge] P1 hit the boundary map perimeter. Step wasted.</span><br>`;
+                        p1Steps--; 
+                    } else if(p1Next.x === p2X && p1Next.y === p2Y) { // COLLISION ENGINE WALL
                         logBox.innerHTML += `<span class="clash-text">[Collision] P1 blocked at (${p1X},${p1Y}) by P2!</span><br>`;
-                        p1Steps = 0;
+                        p1Steps = 0; // Freeze outstanding movement array completely
                     } else { p1X = p1Next.x; p1Y = p1Next.y; p1Steps--; moved = true; }
                 }
 
-                if(p2Steps > 0 && p2Next.x === p2X && p2Next.y === p2Y) {
-                    logBox.innerHTML += `<span style="color: #888;">[Edge] P2 hit the boundary map perimeter. Step wasted.</span><br>`;
-                    p2Steps--; 
-                } else if(p2Steps > 0) {
-                    if(p2Next.x === p1X && p2Next.y === p1Y) {
+                // PROCESS PLAYER 2 POSITION SHIFT
+                if(p2Steps > 0) {
+                    if(p2Next.x === p2X && p2Next.y === p2Y) {
+                        logBox.innerHTML += `<span style="color: #888;">[Edge] P2 hit the boundary map perimeter. Step wasted.</span><br>`;
+                        p2Steps--; 
+                    } else if(p2Next.x === p1X && p2Next.y === p1Y) {
                         logBox.innerHTML += `<span class="clash-text">[Collision] P2 blocked at (${p2X},${p2Y}) by P1!</span><br>`;
                         p2Steps = 0;
                     } else { p2X = p2Next.x; p2Y = p2Next.y; p2Steps--; moved = true; }
                 }
 
+                // Refresh visual frame coordinates if positioning values shift
                 if(moved) {
                     logBox.innerHTML += `Step ${step}: P1 at (${p1X},${p1Y}) | P2 at (${p2X},${p2Y})<br>`;
                     createGridBoard();
                 }
 
+                // CALC MANHATTAN DISTANCE: Determines grid ranges avoiding diagonals: |X1 - X2| + |Y1 - Y2|
                 let dist = Math.abs(p1X - p2X) + Math.abs(p1Y - p2Y);
 
+                // RANGED ATTACK RESOLUTION PIPELINE (Trigger range: exactly 2 tiles away)
                 if(dist === 2) {
                     logBox.innerHTML += `<b>[Ranged Intercept Engaged at Step ${step}!]</b><br>`;
+                    
+                    // CRITICAL LOGIC RULE: Evaluate output simultaneously *before* applying damage deductions
                     let p1Dmg = (p1Order === 'March') ? 0 : Math.round(p1Party.reduce((s, h) => s + h.range, 0) * p2DmgMod);
                     let p2Dmg = (p2Order === 'March') ? 0 : Math.round(p2Party.reduce((s, h) => s + h.range, 0) * p1DmgMod);
 
                     if(p1Dmg > 0) logBox.innerHTML += `P1 snapshot raw volley: ${p1Dmg} dmg.<br>`;
                     if(p2Dmg > 0) logBox.innerHTML += `P2 snapshot raw volley: ${p2Dmg} dmg.<br>`;
 
+                    // Execute snapshot values concurrently into memory arrays
                     if(p1Dmg > 0) dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
                     if(p2Dmg > 0) dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
 
@@ -226,14 +257,18 @@
                     if(!p1Party.length || !p2Party.length) { matchActive = false; createGridBoard(); return; }
                 }
 
+                // MELEE ATTACK RESOLUTION PIPELINE (Trigger range: exactly 1 tile away - adjacent)
                 if(dist === 1) {
                     logBox.innerHTML += `<span class="clash-text">[Melee Engagement Engaged!]</span><br>`;
+                    
+                    // Snapshot baseline outputs concurrently
                     let p1Dmg = Math.round(p1Party.reduce((s, h) => s + h.melee, 0) * p2DmgMod);
                     let p2Dmg = Math.round(p2Party.reduce((s, h) => s + h.melee, 0) * p1DmgMod);
 
                     logBox.innerHTML += `P1 snapshot raw strike: ${p1Dmg} dmg.<br>`;
                     logBox.innerHTML += `P2 snapshot raw strike: ${p2Dmg} dmg.<br>`;
 
+                    // Distribute damage allocations simultaneously
                     dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
                     dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
                     
@@ -241,16 +276,17 @@
                     if(!p1Party.length || !p2Party.length) { matchActive = false; createGridBoard(); return; }
                     
                     logBox.innerHTML += `<span class="clash-text">Melee contact cancels remaining steps.</span><br>`;
-                    break;
+                    break; // Melee proximity completely drops outstanding movement loops
                 }
             }
 
+            // INCREMENT MATCH LOOP STATE OR FINALISE PHASE
             if (currentRound >= 4) {
                 logBox.innerHTML += "<br><b>=== 4 ROUNDS COMPLETE. MATCH TERMINATED ===</b>";
                 matchActive = false;
             } else { currentRound++; document.getElementById('round-indicator').innerText = `Round: ${currentRound} / 4`; }
             createGridBoard();
-            logBox.scrollTop = logBox.scrollHeight;
+            logBox.scrollTop = logBox.scrollHeight; // Autoscroll timeline logs
         }
     </script>
 </body>
