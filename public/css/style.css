@@ -1,0 +1,29 @@
+body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; line-height: 1.4; user-select: none; }
+.game-view { display: none; }
+.view-active { display: block !important; }
+.title-screen-container { text-align: center; padding-top: 50px; }
+.ascii-art-banner { white-space: pre; font-size: 10px; color: #00ff00; line-height: 1.2; display: inline-block; text-align: left; margin-bottom: 40px; }
+.lobby-status-panel { background: #1a1a1a; border: 1px solid #333; padding: 20px; width: 400px; margin: 0 auto 30px auto; border-radius: 4px; }
+.status-line { margin: 10px 0; font-size: 14px; }
+.status-waiting { color: #ff3333; font-weight: bold; }
+.status-ready { color: #00ffff; font-weight: bold; }
+.setup-panel { display: flex; gap: 20px; margin-bottom: 15px; }
+.player-card { border: 1px solid #333; background: #1a1a1a; padding: 15px; width: 45%; border-radius: 4px; opacity: 0.5; }
+.active-faction { opacity: 1.0; border-color: #00ff00; }
+.hero-chip { background: #2a2a2a; padding: 4px 8px; margin: 2px; display: inline-block; border-radius: 3px; font-size: 11px; }
+.control-row { margin-top: 8px; }
+select, button { background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 12px 20px; font-family: monospace; font-weight: bold; cursor: pointer; font-size: 14px; }
+button:hover { background: #002200; }
+button:disabled { border-color: #333; color: #333; cursor: not-allowed; background: #111; }
+.game-layout { display: flex; gap: 30px; margin-top: 15px; }
+.grid-board { display: grid; grid-template-columns: repeat(6, 60px); grid-template-rows: repeat(6, 60px); gap: 4px; background: #222; padding: 6px; border-radius: 4px; border: 2px solid #444; }
+.grid-cell { background: #111; border: 1px solid #333; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; color: #444; position: relative; cursor: pointer; }
+.grid-cell:hover { background: #1c1c1c; }
+.p1-unit { background: #004444 !important; border-color: #00ffff !important; color: #00ffff !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+.p2-unit { background: #442200 !important; border-color: #ff9800 !important; color: #ff9800 !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+.p1-path-select { border: 3px dashed #008888 !important; color: #00ffff !important; background: #001f1f; }
+.p2-path-select { border: 3px dashed #884400 !important; color: #ff9800 !important; background: #241400; }
+.log-box { background: #000; border: 1px solid #00ff00; padding: 15px; height: 350px; overflow-y: auto; font-size: 13px; flex-grow: 1; }
+.clash-text { color: #ff3333; font-weight: bold; }
+.hit-text { color: #ffff00; }
+#identity-banner { background: #222; padding: 10px; border-radius: 4px; font-weight: bold; text-align: center; margin-bottom: 15px; font-size: 16px; }

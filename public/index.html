@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Too Many Heroes</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/engine.js" defer></script>
+    <script src="/js/client.js" defer></script>
+</head>
+<body>
+
+    <!-- SCREEN CONTAINER LAYER 1: TITLE ENGINE LOBBY -->
+    <div id="view-title" class="game-view view-active">
+        <div class="title-screen-container">
+            <div class="ascii-art-banner">
+ _____ ___  _____   ___  ___ ___ _   _ _   _   _   _ ___________ _____ _____ _____ 
+|_   _/ _ \|  _  |  |  \/  |/ _ \ \ | | \ | | | | | |  ___| ___ \  _  |  ___/  ___|
+  | |/ /_\ \ | | |  | .  . / /_\ \  \| |  \| | | |_| | |__ | |_/ / | | | |__ \ `--. 
+  | ||  _  | | | |  | |\/| |  _  | . ` | . ` | |  _  |  __||    /| | | |  __| `--. \
+  | || | | \ \_/ /  | |  | | | | | |\  | |\  | | | | | |___| |\ \\ \_/ / |___/\__/ /
+  \_/\_| |_/\___/   \_|  |_/\_| |_\_| \_\_| \_/ \_| |_\____/\_| \_|\___/\____/\____/
+            </div>
+            <div class="lobby-status-panel">
+                <h3>ARENA MATCH LOBBY</h3>
+                <div class="status-line" id="lobby-p1-row">Player 1 Connection: <span class="status-waiting">DISCONNECTED</span></div>
+                <div class="status-line" id="lobby-p2-row">Player 2 Connection: <span class="status-waiting">DISCONNECTED</span></div>
+            </div>
+            <div>
+                <button id="lobby-ready-btn" onclick="submitLobbyReady()" disabled>CONNECTING TO HOST SERVER...</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCREEN CONTAINER LAYER 2: THE MERCHANT GUILD -->
+    <div id="view-merchant-guild" class="game-view">
+        <div style="text-align: center; padding-top: 100px;">
+            <h1 style="color: #ff9800;">THE MERCHANT GUILD MARKETPLACE</h1>
+            <p style="font-size: 16px; color: #888;">Draft layout interface loading up next sprint...</p>
+            <br>
+            <button onclick="switchView('view-combat-arena')" style="border-color: #ff9800; color: #ff9800;">TEMPORARY BYPASS TO GRID</button>
+        </div>
+    </div>
+
+    <!-- SCREEN CONTAINER LAYER 3: COMBAT MATRIX FIELD -->
+    <div id="view-combat-arena" class="game-view">
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #1e1e1e; padding: 10px 20px; border: 1px solid #333; border-radius: 4px;">
+            <h2>"Too Many Heroes" Grid Selector Matrix</h2>
+            <h2 id="round-indicator" style="color: #ff9800;">Round: 1 / 4</h2>
+        </div>
+        <div id="identity-banner" style="margin-top: 15px;">Setting up combat arrays...</div>
+        <div class="setup-panel">
+            <div class="player-card" id="p1-card">
+                <h3>Player 1 (Cyan)</h3>
+                <div id="p1-roster"></div>
+                <div class="control-row">
+                    <label>Order: </label>
+                    <select id="p1-order" class="p1-input" onchange="clearSelectedPaths()">
+                        <option value="Advance">Advance (2 Tiles)</option>
+                        <option value="March">March (3 Tiles)</option>
+                        <option value="Seek">Seek (1 Tile)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="player-card" id="p2-card">
+                <h3>Player 2 (Orange)</h3>
+                <div id="p2-roster"></div>
+                <div class="control-row">
+                    <label>Order: </label>
+                    <select id="p2-order" class="p2-input" onchange="clearSelectedPaths()">
+                        <option value="Advance">Advance (2 Tiles)</option>
+                        <option value="March">March (3 Tiles)</option>
+                        <option value="Seek">Seek (1 Tile)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div style="text-align: center;">
+            <button id="lock-btn" onclick="lockAndSubmitOrders()">LOCK IN ORDERS FOR THIS ROUND</button>
+        </div>
+        <div class="game-layout">
+            <div class="grid-board" id="map-board"></div>
+            <div id="log" class="log-box">Awaiting match initiation from referee...</div>
+        </div>
+    </div>
+
+</body>
+</html>

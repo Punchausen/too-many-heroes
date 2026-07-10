@@ -6,18 +6,19 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-app.get('/', (req, res) => { res.sendFile(__dirname + '/index.html'); });
+// Decoupling Route: Serve all frontend assets dynamically from the 'public' directory
+app.use(express.static(__dirname + '/public'));
 
-// GLOBAL MULTIPLAYER STATE
-let players = {};             // Maps 'p1' and 'p2' to socket IDs
-let readyStatus = { p1: false, p2: false }; // Tracks lobby readiness
-let currentRoundMoves = {};   // Tracks turn submissions
-let gameStarted = false;      // Locks out late joiners
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/public/index.html');
+});
+
+let players = {};
+let readyStatus = { p1: false, p2: false };
+let currentRoundMoves = {};
+let gameStarted = false;
 
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
-
-    // ROLE ASSIGNMENT ENGINE WITH GAME-IN-PROGRESS LOCKOUT
     if (gameStarted) {
         socket.emit('assign-player', { faction: 'spectator', gameStarted: true });
     } else if (!players['p1']) {
@@ -30,22 +31,15 @@ io.on('connection', (socket) => {
         socket.emit('assign-player', { faction: 'spectator', gameStarted: false });
     }
 
-    // Broadcast current lobby status to everyone immediately upon connection
     io.emit('lobby-status', { readyStatus, players });
 
-    // LISTENER: Player clicks the "READY" button on the Title Screen
     socket.on('player-ready', (data) => {
         if (data.faction === 'p1' || data.faction === 'p2') {
             readyStatus[data.faction] = true;
-            console.log(`Lobby Update: ${data.faction} is READY`);
-            
-            // Broadcast the updated readiness states
             io.emit('lobby-status', { readyStatus, players });
 
-            // CRITICAL TRANSITION: Trigger stage advance when both slots lock in
             if (readyStatus.p1 && readyStatus.p2) {
                 gameStarted = true;
-                console.log("Lobby fully locked! Transitioning to Merchant Guild.");
                 io.emit('transition-stage', { stage: 'merchant-guild' });
             }
         }
@@ -62,14 +56,8 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         if (players['p1'] === socket.id) { players['p1'] = null; readyStatus.p1 = false; }
         if (players['p2'] === socket.id) { players['p2'] = null; readyStatus.p2 = false; }
-        
-        // If both players leave, reset the system flag so a new game can form
-        if (!players['p1'] && !players['p2']) {
-            gameStarted = false;
-        }
-
+        if (!players['p1'] && !players['p2']) gameStarted = false;
         io.emit('lobby-status', { readyStatus, players });
-        console.log(`User disconnected: ${socket.id}`);
     });
 });
 
