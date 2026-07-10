@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Too Many Heroes - Network Client</title>
+    <title>Too Many Heroes - Master Client</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; line-height: 1.4; }
+        body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; line-height: 1.4; user-select: none; }
         .setup-panel { display: flex; gap: 20px; margin-bottom: 15px; }
         .player-card { border: 1px solid #333; background: #1a1a1a; padding: 15px; width: 45%; border-radius: 4px; opacity: 0.5; }
         .active-faction { opacity: 1.0; border-color: #00ff00; }
@@ -15,10 +15,17 @@
         button:hover { background: #002200; }
         button:disabled { border-color: #333; color: #333; cursor: not-allowed; }
         .game-layout { display: flex; gap: 30px; margin-top: 15px; }
+        
         .grid-board { display: grid; grid-template-columns: repeat(6, 60px); grid-template-rows: repeat(6, 60px); gap: 4px; background: #222; padding: 6px; border-radius: 4px; border: 2px solid #444; }
-        .grid-cell { background: #111; border: 1px solid #333; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; color: #444; position: relative; }
-        .p1-unit { background: #004444 !important; border-color: #00ffff !important; color: #00ffff !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
-        .p2-unit { background: #442200 !important; border-color: #ff9800 !important; color: #ff9800 !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; }
+        .grid-cell { background: #111; border: 1px solid #333; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; color: #444; position: relative; cursor: pointer; }
+        .grid-cell:hover { background: #1c1c1c; }
+        
+        .p1-unit { background: #004444 !important; border-color: #00ffff !important; color: #00ffff !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        .p2-unit { background: #442200 !important; border-color: #ff9800 !important; color: #ff9800 !important; border: 2px solid; border-radius: 4px; width: 85%; height: 85%; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        
+        .p1-path-select { border: 3px dashed #008888 !important; color: #00ffff !important; background: #001f1f; }
+        .p2-path-select { border: 3px dashed #884400 !important; color: #ff9800 !important; background: #241400; }
+        
         .log-box { background: #000; border: 1px solid #00ff00; padding: 15px; height: 350px; overflow-y: auto; font-size: 13px; flex-grow: 1; }
         .clash-text { color: #ff3333; font-weight: bold; }
         .hit-text { color: #ffff00; }
@@ -28,7 +35,7 @@
 <body>
 
     <div style="display: flex; justify-content: space-between; align-items: center; background: #1e1e1e; padding: 10px 20px; border: 1px solid #333; border-radius: 4px;">
-        <h2>"Too Many Heroes" Online Arena</h2>
+        <h2>"Too Many Heroes" Grid Selector Matrix</h2>
         <h2 id="round-indicator" style="color: #ff9800;">Round: 1 / 4</h2>
     </div>
 
@@ -40,15 +47,12 @@
             <div id="p1-roster"></div>
             <div class="control-row">
                 <label>Order: </label>
-                <select id="p1-order" class="p1-input">
+                <select id="p1-order" class="p1-input" onchange="clearSelectedPaths()">
                     <option value="Advance">Advance (2 Tiles)</option>
                     <option value="March">March (3 Tiles)</option>
                     <option value="Seek">Seek (1 Tile)</option>
                 </select>
-                <label style="margin-left: 10px;">Heading: </label>
-                <select id="p1-dir" class="p1-input">
-                    <option value="EAST">East (Right)</option><option value="SOUTH">South (Down)</option><option value="NORTH">North (Up)</option><option value="WEST">West (Left)</option>
-                </select>
+                <span style="font-size: 11px; margin-left: 15px; color: #888;">Click grid tiles to layout map path.</span>
             </div>
         </div>
 
@@ -57,21 +61,18 @@
             <div id="p2-roster"></div>
             <div class="control-row">
                 <label>Order: </label>
-                <select id="p2-order" class="p2-input">
+                <select id="p2-order" class="p2-input" onchange="clearSelectedPaths()">
                     <option value="Advance">Advance (2 Tiles)</option>
                     <option value="March">March (3 Tiles)</option>
                     <option value="Seek">Seek (1 Tile)</option>
                 </select>
-                <label style="margin-left: 10px;">Heading: </label>
-                <select id="p2-dir" class="p2-input">
-                    <option value="WEST">West (Left)</option><option value="NORTH">North (Up)</option><option value="SOUTH">South (Down)</option><option value="EAST">East (Right)</option>
-                </select>
+                <span style="font-size: 11px; margin-left: 15px; color: #888;">Click grid tiles to layout map path.</span>
             </div>
         </div>
     </div>
 
     <div style="text-align: center;">
-        <button id="lock-btn" onclick="lockAndSubmitOrders()" style="background: #00ff00; color: black; font-size: 16px;">LOCK IN ORDERS FOR THIS ROUND</button>
+        <button id="lock-btn" onclick="lockAndSubmitOrders()">LOCK IN ORDERS FOR THIS ROUND</button>
     </div>
 
     <div class="game-layout">
@@ -80,9 +81,8 @@
     </div>
 
     <script>
-        // NETWORK SOCKET INITIALIZATION
         const socket = io();
-        let myFaction = null; // Stored assignment state ('p1', 'p2', or 'spectator')
+        let myFaction = null;
 
         const HERO_TEMPLATES = {
             'Barbarian': { hp: 100, melee: 40, range: 0 },
@@ -91,30 +91,25 @@
             'Knight':    { hp: 120, melee: 25, range: 0 }
         };
 
-        // GLOBAL DETERMINISTIC MATCH SEED STATE
-        // To keep the game identical on both screens, both clients generate teams from the same seed arrays
         let p1Party = [], p2Party = [];
         let p1X = 0, p1Y = 2;
         let p2X = 5, p2Y = 3;
         let currentRound = 1, matchActive = true;
+        let selectedPath = []; 
 
-        // SEED COMPATIBLE PARTY GENERATION
         function generateFixedParty(rolesArray) {
             return rolesArray.map(r => ({
                 role: r, hp: HERO_TEMPLATES[r].hp, baseHp: HERO_TEMPLATES[r].hp, melee: HERO_TEMPLATES[r].melee, range: HERO_TEMPLATES[r].range
             }));
         }
 
-        // Hardcoding standard test squads for stability over networking initialization tests
         p1Party = generateFixedParty(['Knight', 'Elf', 'Mage', 'Barbarian']);
         p2Party = generateFixedParty(['Barbarian', 'Barbarian', 'Knight', 'Mage']);
 
-        // CONNECTIVITY BOUND LISTENER: Server gives us our assigned seat
         socket.on('assign-player', (data) => {
             myFaction = data.faction;
             const banner = document.getElementById('identity-banner');
             
-            // Lock out interactive fields on blocks that do not belong to our assigned socket Faction role
             if(myFaction === 'p1') {
                 banner.innerHTML = `<span style="color: #00ffff;">YOU ARE PLAYER 1 (CYAN)</span>`;
                 document.getElementById('p1-card').classList.add('active-faction');
@@ -126,8 +121,7 @@
             } else {
                 banner.innerHTML = `<span style="color: #888;">SPECTATOR MODE (VIEWING LIVE BOARD)</span>`;
                 document.getElementById('lock-btn').disabled = true;
-                disableInputs('.p1-input', true);
-                disableInputs('.p2-input', true);
+                disableInputs('.p1-input', true); disableInputs('.p2-input', true);
             }
             initializeMatchUI();
         });
@@ -140,13 +134,41 @@
             renderRoster(p1Party, 'p1-roster');
             renderRoster(p2Party, 'p2-roster');
             createGridBoard();
-            document.getElementById('log').innerHTML = "Connected to battlefield network. Choose heading and lock your turn.";
+            document.getElementById('log').innerHTML = "Connected. Click map cells adjacent to your unit token to draw an action path track.";
         }
 
-        function renderRoster(party, id) {
-            const el = document.getElementById(id);
-            if (!party.length) { el.innerHTML = "<span style='color:#ff3333;'>WIPED OUT</span>"; return; }
-            el.innerHTML = party.map(h => `<div class="hero-chip"><b>${h.role}</b> (❤${h.hp}/${h.baseHp})</div>`).join('');
+        function handleCellClick(x, y) {
+            if (!matchActive || myFaction === 'spectator') return;
+
+            let homeX = (myFaction === 'p1') ? p1X : p2X;
+            let homeY = (myFaction === 'p1') ? p1Y : p2Y;
+
+            let orderType = document.getElementById(`${myFaction}-order`).value;
+            const distances = { 'Seek': 1, 'Advance': 2, 'March': 3 };
+            let maxCapacity = distances[orderType];
+
+            let existingIndex = selectedPath.findIndex(cell => cell.x === x && cell.y === y);
+            if (existingIndex !== -1) {
+                selectedPath = selectedPath.slice(0, existingIndex);
+                createGridBoard();
+                return;
+            }
+
+            if (selectedPath.length >= maxCapacity) return;
+
+            let anchorX = (selectedPath.length === 0) ? homeX : selectedPath[selectedPath.length - 1].x;
+            let anchorY = (selectedPath.length === 0) ? homeY : selectedPath[selectedPath.length - 1].y;
+
+            let distance = Math.abs(x - anchorX) + Math.abs(y - anchorY);
+            if (distance !== 1) return;
+
+            selectedPath.push({ x: x, y: y });
+            createGridBoard();
+        }
+
+        function clearSelectedPaths() {
+            selectedPath = [];
+            createGridBoard();
         }
 
         function createGridBoard() {
@@ -156,123 +178,157 @@
                 for(let x=0; x<6; x++) {
                     let cell = document.createElement('div');
                     cell.className = 'grid-cell';
+                    cell.setAttribute('onclick', `handleCellClick(${x},${y})`);
+                    cell.innerText = `(${x},${y})`;
+
+                    let isPathTile = selectedPath.some(c => c.x === x && c.y === y);
+                    if (isPathTile) {
+                        cell.classList.add(`${myFaction}-path-select`);
+                    }
+
                     if(x === p1X && y === p1Y && p1Party.length) cell.innerHTML = '<div class="p1-unit">P1</div>';
                     else if(x === p2X && y === p2Y && p2Party.length) cell.innerHTML = '<div class="p2-unit">P2</div>';
-                    else cell.innerText = `(${x},${y})`;
                     board.appendChild(cell);
                 }
             }
         }
 
-        // SUBMITTER OUTBOUND TRIGGER: Ship our decisions over WebSockets to the server room database
+        function renderRoster(party, id) {
+            const el = document.getElementById(id);
+            if (!party.length) { el.innerHTML = "<span style='color:#ff3333;'>WIPED OUT</span>"; return; }
+            el.innerHTML = party.map(h => `<div class="hero-chip"><b>${h.role}</b> (❤${h.hp}/${h.baseHp})</div>`).join('');
+        }
+
         function lockAndSubmitOrders() {
             if(myFaction === 'spectator') return;
-
             let order = document.getElementById(`${myFaction}-order`).value;
-            let dir = document.getElementById(`${myFaction}-dir`).value;
-
-            // Transmit package payload package
-            socket.emit('submit-turn', { faction: myFaction, order: order, dir: dir });
-
+            socket.emit('submit-turn', { faction: myFaction, order: order, path: selectedPath });
             document.getElementById('lock-btn').disabled = true;
             document.getElementById('lock-btn').innerText = "AWAITING OPPONENT MOVE LOCK...";
         }
 
-        // INBOUND MASTER REFEREE BROADCAST: Both players locked, execute timeline step math
+        /* DETACHED ISOLATED MUTATION-SAFE DAMAGE SIMULATION ENGINE */
+        function dealSpilloverDamage(party, totalDamage, logBox, label) {
+            let remainingDmg = totalDamage;
+            let tempParty = JSON.parse(JSON.stringify(party));
+
+            while(remainingDmg > 0 && tempParty.length > 0) {
+                tempParty.sort((a, b) => b.baseHp - a.baseHp);
+                let tank = tempParty[0];
+
+                if(tank.hp > remainingDmg) {
+                    tank.hp -= remainingDmg;
+                    logBox.innerHTML += `<span class="hit-text"> -> [${label}] ${tank.role} takes ${remainingDmg} damage (${tank.hp}/${tank.baseHp} HP left).</span><br>`;
+                    remainingDmg = 0;
+                } else {
+                    remainingDmg -= tank.hp;
+                    logBox.innerHTML += `<span class="hit-text" style="color:#ff5555;"> -> [${label}] ${tank.role} collapses!</span><br>`;
+                    tempParty.shift();
+                }
+            }
+
+            if (label === 'P1') p1Party = tempParty;
+            if (label === 'P2') p2Party = tempParty;
+        }
+
         socket.on('resolve-round', (moves) => {
             const logBox = document.getElementById('log');
-            logBox.innerHTML += `<br><b>=== DISTRIBUTED ENGINE RESOLUTION (ROUND ${currentRound}) ===</b><br>`;
+            if (!matchActive) return;
 
-            const distances = { 'Seek': 1, 'Advance': 2, 'March': 3 };
-            let p1Steps = distances[moves.p1.order], p2Steps = distances[moves.p2.order];
+            logBox.innerHTML += `<br><b>=== DISTRIBUTED ENGINE RESOLUTION (ROUND ${currentRound}) ===</b><br>`;
 
             let p1DmgMod = moves.p1.order === 'Seek' ? 0.75 : (moves.p1.order === 'March' ? 1.5 : 1.0);
             let p2DmgMod = moves.p2.order === 'Seek' ? 0.75 : (moves.p2.order === 'March' ? 1.5 : 1.0);
 
-            for (let step = 1; step <= 3; step++) {
+            let p1PathArr = moves.p1.path || [];
+            let p2PathArr = moves.p2.path || [];
+
+            for (let step = 0; step < 3; step++) {
                 let moved = false;
-                let p1Next = p1Steps > 0 ? getNextStep(p1X, p1Y, moves.p1.dir) : { x: p1X, y: p1Y };
-                let p2Next = p2Steps > 0 ? getNextStep(p2X, p2Y, moves.p2.dir) : { x: p2X, y: p2Y };
+                let p1Target = p1PathArr[step] || { x: p1X, y: p1Y };
+                let p2Target = p2PathArr[step] || { x: p2X, y: p2Y };
 
-                if(p1Steps > 0) {
-                    if(p1Next.x === p1X && p1Next.y === p1Y) { p1Steps--; } 
-                    else if(p1Next.x === p2X && p1Next.y === p2Y) { logBox.innerHTML += `<span class="clash-text">[Collision] P1 blocked!</span><br>`; p1Steps = 0; }
-                    else { p1X = p1Next.x; p1Y = p1Next.y; p1Steps--; moved = true; }
+                if (step < p1PathArr.length) {
+                    if (p1Target.x === p2X && p1Target.y === p2Y) {
+                        logBox.innerHTML += `<span class="clash-text">[Collision] P1 blocked at (${p1X},${p1Y})!</span><br>`;
+                        p1PathArr = [];
+                    } else { p1X = p1Target.x; p1Y = p1Target.y; moved = true; }
                 }
 
-                if(p2Steps > 0) {
-                    if(p2Next.x === p2X && p2Next.y === p2Y) { p2Steps--; } 
-                    else if(p2Next.x === p1X && p2Next.y === p1Y) { logBox.innerHTML += `<span class="clash-text">[Collision] P2 blocked!</span><br>`; p2Steps = 0; }
-                    else { p2X = p2Next.x; p2Y = p2Next.y; p2Steps--; moved = true; }
+                if (step < p2PathArr.length) {
+                    if (p2Target.x === p1X && p2Target.y === p1Y) {
+                        logBox.innerHTML += `<span class="clash-text">[Collision] P2 blocked at (${p2X},${p2Y})!</span><br>`;
+                        p2PathArr = [];
+                    } else { p2X = p2Target.x; p2Y = p2Target.y; moved = true; }
                 }
 
-                if(moved) {
-                    logBox.innerHTML += `Step ${step}: P1 at (${p1X},${p1Y}) | P2 at (${p2X},${p2Y})<br>`;
+                if (moved) {
+                    logBox.innerHTML += `Step ${step + 1}: P1 at (${p1X},${p1Y}) | P2 at (${p2X},${p2Y})<br>`;
                 }
 
                 let dist = Math.abs(p1X - p2X) + Math.abs(p1Y - p2Y);
 
-                if(dist === 2) {
-                    logBox.innerHTML += `<b>[Ranged Intercept Engaged!]</b><br>`;
+                if (dist === 2) {
+                    logBox.innerHTML += `<b>[Ranged Intercept Engaged at Step ${step + 1}!]</b><br>`;
                     let p1Dmg = (moves.p1.order === 'March') ? 0 : Math.round(p1Party.reduce((s, h) => s + h.range, 0) * p2DmgMod);
                     let p2Dmg = (moves.p2.order === 'March') ? 0 : Math.round(p2Party.reduce((s, h) => s + h.range, 0) * p1DmgMod);
-                    if(p1Dmg > 0) dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
-                    if(p2Dmg > 0) dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
-                    if(!p1Party.length || !p2Party.length) { matchActive = false; break; }
+                    if (p1Dmg > 0) dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
+                    if (p2Dmg > 0) dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
                 }
 
-                if(dist === 1) {
-                    logBox.innerHTML += `<span class="clash-text">[Melee Engagement Engaged!]</span><br>`;
+                if (dist === 1) {
+                    logBox.innerHTML += `<span class="clash-text">[Melee Engagement Engaged at Step ${step + 1}!]</span><br>`;
                     let p1Dmg = Math.round(p1Party.reduce((s, h) => s + h.melee, 0) * p2DmgMod);
                     let p2Dmg = Math.round(p2Party.reduce((s, h) => s + h.melee, 0) * p1DmgMod);
                     dealSpilloverDamage(p2Party, p1Dmg, logBox, 'P2');
                     dealSpilloverDamage(p1Party, p2Dmg, logBox, 'P1');
+                }
+
+                // ANNIHILATION GUARD: Terminate mid-step if a party runs completely out of heroes
+                if (p1Party.length === 0 || p2Party.length === 0) {
+                    matchActive = false;
                     break;
                 }
+                if (dist === 1) break; // Melee safely drops remaining timeline slices
             }
 
-            // Clean engine data cycles up
-            currentRound++;
-            if(currentRound > 4) {
-                logBox.innerHTML += "<br><b>=== MATCH OVER ===</b>";
+            selectedPath = [];
+            
+            // CHECK WIN CONDITION STATUS
+            if (!p1Party.length && !p2Party.length) {
+                logBox.innerHTML += "<br><span class='clash-text'>=== MUTUAL TOTAL ANNIHILATION ===</span>";
+                matchActive = false;
+            } else if (!p1Party.length) {
+                logBox.innerHTML += "<br><span class='clash-text'>=== PLAYER 2 WINS THE Arena! ===</span>";
+                matchActive = false;
+            } else if (!p2Party.length) {
+                logBox.innerHTML += "<br><span class='clash-text'>=== PLAYER 1 WINS THE Arena! ===</span>";
+                matchActive = false;
+            }
+
+            if (!matchActive) {
                 document.getElementById('lock-btn').disabled = true;
+                document.getElementById('lock-btn').innerText = "MATCH CONCLUDED";
             } else {
-                document.getElementById('round-indicator').innerText = `Round: ${currentRound} / 4`;
-                if(myFaction !== 'spectator') {
-                    document.getElementById('lock-btn').disabled = false;
-                    document.getElementById('lock-btn').innerText = "LOCK IN ORDERS FOR THIS ROUND";
+                currentRound++;
+                if (currentRound > 4) {
+                    logBox.innerHTML += "<br><b>=== REACHED MATCH LIMIT ROUND 4 ===</b>";
+                    matchActive = false;
+                    document.getElementById('lock-btn').disabled = true;
+                    document.getElementById('lock-btn').innerText = "MATCH OVER";
+                } else {
+                    document.getElementById('round-indicator').innerText = `Round: ${currentRound} / 4`;
+                    if (myFaction !== 'spectator') {
+                        document.getElementById('lock-btn').disabled = false;
+                        document.getElementById('lock-btn').innerText = "LOCK IN ORDERS FOR THIS ROUND";
+                    }
                 }
             }
             renderRoster(p1Party, 'p1-roster');
             renderRoster(p2Party, 'p2-roster');
             createGridBoard();
             logBox.scrollTop = logBox.scrollHeight;
-        }
-        );
-
-        function getNextStep(x, y, direction) {
-            let nx = x, ny = y;
-            if(direction === 'NORTH') ny--; if(direction === 'SOUTH') ny++;
-            if(direction === 'EAST')  nx++; if(direction === 'WEST')  nx--;
-            return { x: Math.max(0, Math.min(5, nx)), y: Math.max(0, Math.min(5, ny)) };
-        }
-
-        function dealSpilloverDamage(party, totalDamage, logBox, label) {
-            let remainingDmg = totalDamage;
-            while(remainingDmg > 0 && party.length > 0) {
-                party.sort((a, b) => b.baseHp - a.baseHp);
-                let tank = party[0];
-                if(tank.hp > remainingDmg) {
-                    tank.hp -= remainingDmg;
-                    logBox.innerHTML += `<span class="hit-text"> -> [${label}] ${tank.role} takes ${remainingDmg} damage (${tank.hp} left).</span><br>`;
-                    remainingDmg = 0;
-                } else {
-                    remainingDmg -= tank.hp;
-                    logBox.innerHTML += `<span class="hit-text" style="color:#ff5555;"> -> [${label}] ${tank.role} collapses!</span><br>`;
-                    party.shift();
-                }
-            }
-        }
+        });
     </script>
 </body>
 </html>
