@@ -1,5 +1,13 @@
+// CANVAS ROUTING ENGINE STATES
+let currentScene = 'TITLE'; // Options: 'TITLE', 'TAVERN', 'ARENA'
+let lobbyStatusText = { p1: 'DISCONNECTED', p2: 'DISCONNECTED', readyP1: false, readyP2: false };
+
+// Visual UI layout bounds for mouse boundary collision detection
+let uiButtons = {};
+
 /* COMBAT BLUEPRINTS & MUTABLE STATE MANIFEST */
 const HERO_TEMPLATES = {
+    'Peasant':   { hp: 30,  melee: 10, range: 0 },  // Baseline starting class
     'Barbarian': { hp: 100, melee: 40, range: 0 },
     'Elf':       { hp: 50,  melee: 15, range: 25 },
     'Mage':      { hp: 40,  melee: 10, range: 35 },
@@ -14,18 +22,22 @@ let currentRound = 1;
 let matchActive = true;
 let selectedPath = [];
 
+// TAVERN ENGINE STATE PROPERTIES (Local Client Tracking)
+let playerGold = 100;
+let currentTavernOffer = [];
+let currentTavernCost = 0;
+
 function generateFixedParty(rolesArray) {
     return rolesArray.map(r => ({
         role: r, hp: HERO_TEMPLATES[r].hp, baseHp: HERO_TEMPLATES[r].hp, melee: HERO_TEMPLATES[r].melee, range: HERO_TEMPLATES[r].range
     }));
 }
 
-// Instantiate starting rosters
-p1Party = generateFixedParty(['Knight', 'Elf', 'Mage', 'Barbarian']);
-p2Party = generateFixedParty(['Barbarian', 'Barbarian', 'Knight', 'Mage']);
+// CRITICAL ADJUSTMENT: Initialize both commanders with default starting Peasants
+p1Party = generateFixedParty(['Peasant', 'Peasant', 'Peasant', 'Peasant']);
+p2Party = generateFixedParty(['Peasant', 'Peasant', 'Peasant', 'Peasant']);
 
 /* PURE PRE-CALCULATED SPILLOVER DAMAGE APPLIER */
-// This function no longer reads total alive party stats mid-loop; it simply allocates pre-calculated damage pools
 function applySpilloverDamage(party, totalDamage, logBox, label) {
     let remainingDmg = totalDamage;
     let tempParty = JSON.parse(JSON.stringify(party));
@@ -44,14 +56,8 @@ function applySpilloverDamage(party, totalDamage, logBox, label) {
             tempParty.shift();
         }
     }
-    return tempParty; // Return modified survivor array
+    return tempParty;
 }
 
-/* TOTAL RAW PARTY OUTPUT SNAPSHOTS */
-function getPartyMeleeOutput(party) {
-    return party.reduce((sum, hero) => sum + hero.melee, 0);
-}
-
-function getPartyRangedOutput(party) {
-    return party.reduce((sum, hero) => sum + hero.range, 0);
-}
+function getPartyMeleeOutput(party) { return party.reduce((sum, hero) => sum + hero.melee, 0); }
+function getPartyRangedOutput(party) { return party.reduce((sum, hero) => sum + hero.range, 0); }
