@@ -6,17 +6,17 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-// Decoupling Route: Serve all frontend assets dynamically from the 'public' directory
 app.use(express.static(__dirname + '/public'));
 
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/public/index.html');
-});
+app.get('/', (req, res) => { res.sendFile(__dirname + '/public/index.html'); });
 
 let players = {};
 let readyStatus = { p1: false, p2: false };
 let currentRoundMoves = {};
 let gameStarted = false;
+
+// SQUAD TRACKING OBJECT LAYERS
+let deployedSquads = { p1: null, p2: null };
 
 io.on('connection', (socket) => {
     if (gameStarted) {
@@ -45,6 +45,23 @@ io.on('connection', (socket) => {
         }
     });
 
+    // LISTENER: Processes incoming team configurations from the Tavern view
+    socket.on('deploy-squad', (data) => {
+        if (data.faction === 'p1' || data.faction === 'p2') {
+            deployedSquads[data.faction] = data.party;
+            console.log(`Squad Synced: ${data.faction} locked in their team composition.`);
+
+            // Trigger structural map gate when both deployment records populate
+            if (deployedSquads.p1 && deployedSquads.p2) {
+                io.emit('transition-stage', { 
+                    stage: 'combat-arena',
+                    p1Party: deployedSquads.p1,
+                    p2Party: deployedSquads.p2
+                });
+            }
+        }
+    });
+
     socket.on('submit-turn', (data) => {
         currentRoundMoves[data.faction] = { order: data.order, path: data.path };
         if (currentRoundMoves['p1'] && currentRoundMoves['p2']) {
@@ -56,7 +73,7 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         if (players['p1'] === socket.id) { players['p1'] = null; readyStatus.p1 = false; }
         if (players['p2'] === socket.id) { players['p2'] = null; readyStatus.p2 = false; }
-        if (!players['p1'] && !players['p2']) gameStarted = false;
+        if (!players['p1'] && !players['p2']) { gameStarted = false; deployedSquads = { p1: null, p2: null }; }
         io.emit('lobby-status', { readyStatus, players });
     });
 });
