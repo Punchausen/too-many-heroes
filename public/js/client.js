@@ -10,7 +10,6 @@ const logOverlay = document.getElementById('combat-log-overlay');
 // Asset Storage Cache
 const Assets = {};
 
-// Add this right near the top of public/js/client.js below const Assets = {};
 function generateColorPlaceholder(color, width, height) {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = width;
@@ -23,7 +22,6 @@ function generateColorPlaceholder(color, width, height) {
     return img;
 }
 
-// Hardcoded Local Blueprints to eliminate cross-file script load dependencies
 const LOCAL_HERO_TEMPLATES = {
     'Peasant':   { hp: 30,  melee: 10, range: 0 },
     'Barbarian': { hp: 100, melee: 40, range: 0 },
@@ -39,6 +37,14 @@ let currentScene = 'TITLE';
 let matchActive = true;
 let currentRound = 1;
 let playerGold = 100;
+let isWaitingForCombatResolution = false;
+
+// UNIFIED MASTER GRID METRICS
+const ARENA_GRID = {
+    offsetX: 290,
+    offsetY: 80,
+    cellSize: 65
+};
 
 let p1Party = [ {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0} ];
 let p2Party = [ {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0} ];
@@ -190,10 +196,13 @@ function drawTavernScreen() {
         let cardY = panelY + 40 + (idx * 72);
         ctx.fillStyle = '#222'; ctx.fillRect(leftPanelX + 15, cardY, panelW - 30, 60);
         ctx.strokeStyle = '#444'; ctx.strokeRect(leftPanelX + 15, cardY, panelW - 30, 60);
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.fillText(h.role.toUpperCase(), leftPanelX + 30, cardY + 25);
+        
+        let hpText = h.hp > 0 ? `${h.hp}/${h.baseHp} HP` : `UNCONSCIOUS`;
+        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555';
+        ctx.font = 'bold 14px monospace'; ctx.fillText(h.role.toUpperCase(), leftPanelX + 30, cardY + 25);
         ctx.font = '12px monospace'; ctx.fillStyle = '#aaa';
         let attackLabel = h.range > 0 ? `🏹${h.range} Ranged` : `⚔${h.melee} Melee`;
-        ctx.fillText(`❤ ${h.hp} HP  |  ${attackLabel}`, leftPanelX + 30, cardY + 45);
+        ctx.fillText(`❤ ${hpText}  |  ${attackLabel}`, leftPanelX + 30, cardY + 45);
     });
 
     // Right Box
@@ -243,50 +252,101 @@ function drawArenaScreen() {
 
     ctx.textAlign = 'left'; ctx.font = 'bold 14px monospace';
     ctx.fillStyle = '#00ffff'; ctx.fillText("PLAYER 1 (CYAN)", 30, 95);
-    p1Party.forEach((h, idx) => { ctx.fillStyle = '#fff'; ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, 30, 120 + (idx * 22)); });
+    p1Party.forEach((h, idx) => { 
+        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555'; 
+        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, 30, 120 + (idx * 22)); 
+    });
 
     ctx.fillStyle = '#ff9800'; ctx.fillText("PLAYER 2 (ORANGE)", canvas.width - 220, 95);
-    p2Party.forEach((h, idx) => { ctx.fillStyle = '#fff'; ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, canvas.width - 220, 120 + (idx * 22)); });
+    p2Party.forEach((h, idx) => { 
+        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555'; 
+        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, canvas.width - 220, 120 + (idx * 22)); 
+    });
 
-    let gridOffsetX = 260, gridOffsetY = 90, cellSize = 75;
+    // Render Matrix Utilizing the Shared Global Properties
     for (let y = 0; y < 6; y++) {
         for (let x = 0; x < 6; x++) {
-            let cx = gridOffsetX + (x * cellSize), cy = gridOffsetY + (y * cellSize);
-            ctx.fillStyle = '#111'; ctx.fillRect(cx, cy, cellSize, cellSize);
-            ctx.strokeStyle = '#222'; ctx.strokeRect(cx, cy, cellSize, cellSize);
-            ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.fillText(`(${x},${y})`, cx + cellSize / 2, cy + 20);
+            let cx = ARENA_GRID.offsetX + (x * ARENA_GRID.cellSize);
+            let cy = ARENA_GRID.offsetY + (y * ARENA_GRID.cellSize);
+            
+            ctx.fillStyle = '#111'; ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+            ctx.strokeStyle = '#222'; ctx.strokeRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+            ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.fillText(`(${x},${y})`, cx + ARENA_GRID.cellSize / 2, cy + 20);
 
             if (selectedPath.some(c => c.x === x && c.y === y)) {
                 ctx.fillStyle = (myFaction === 'p1') ? 'rgba(0, 255, 255, 0.25)' : 'rgba(255, 152, 0, 0.25)';
-                ctx.fillRect(cx + 2, cy + 2, cellSize - 4, cellSize - 4);
+                ctx.fillRect(cx + 2, cy + 2, ARENA_GRID.cellSize - 4, ARENA_GRID.cellSize - 4);
             }
-            if (x === p1X && y === p1Y && p1Party.length) {
-                ctx.fillStyle = '#00ffff'; ctx.fillRect(cx + 10, cy + 25, cellSize - 20, 35);
-                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P1", cx + cellSize / 2, cy + 48);
-            } else if (x === p2X && y === p2Y && p2Party.length) {
-                ctx.fillStyle = '#ff9800'; ctx.fillRect(cx + 10, cy + 25, cellSize - 20, 35);
-                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P2", cx + cellSize / 2, cy + 48);
+            if (x === p1X && y === p1Y) {
+                ctx.fillStyle = '#00ffff'; ctx.fillRect(cx + 10, cy + 25, ARENA_GRID.cellSize - 20, 35);
+                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P1", cx + ARENA_GRID.cellSize / 2, cy + 48);
+            } else if (x === p2X && y === p2Y) {
+                ctx.fillStyle = '#ff9800'; ctx.fillRect(cx + 10, cy + 25, ARENA_GRID.cellSize - 20, 35);
+                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P2", cx + ARENA_GRID.cellSize / 2, cy + 48);
             }
         }
     }
 
     if (myFaction !== 'spectator') {
         let currentOrder = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder;
-        ctx.fillStyle = '#fff'; ctx.font = '14px monospace'; ctx.textAlign = 'left'; ctx.fillText("CHOOSE DIRECTIVE ORDER ACTION:", 30, 485);
+        
+        ctx.fillStyle = '#fff';
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText("CHOOSE DIRECTIVE ORDER ACTION:", 30, 495);
 
         const orders = ['Seek', 'Advance', 'March'];
         orders.forEach((o, idx) => {
-            let bx = 30 + (idx * 130), by = 500, bw = 110, bh = 35;
-            ctx.fillStyle = (currentOrder === o) ? '#ff9800' : '#222'; ctx.fillRect(bx, by, bw, bh);
-            ctx.fillStyle = (currentOrder === o) ? '#000' : '#fff'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
-            ctx.fillText(o.toUpperCase(), bx + bw / 2, by + 22);
-            uiButtons[`ORDER_${o.toUpperCase()}`] = { x: bx, y: by, w: bw, h: bh, action: () => { if(myFaction==='p1') p1SelectedOrder=o; else p2SelectedOrder=o; selectedPath=[]; } };
+            let bx = 30 + (idx * 125);
+            let by = 515;
+            let bw = 110;
+            let bh = 40;
+
+            ctx.fillStyle = (currentOrder === o) ? '#ff9800' : '#222';
+            ctx.fillRect(bx, by, bw, bh);
+            ctx.strokeStyle = '#444';
+            ctx.strokeRect(bx, by, bw, bh);
+
+            ctx.fillStyle = (currentOrder === o) ? '#000' : '#fff';
+            ctx.font = 'bold 12px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(o.toUpperCase(), bx + bw / 2, by + 24);
+
+            uiButtons[`ORDER_${o.toUpperCase()}`] = {
+                x: bx, y: by, w: bw, h: bh,
+                action: () => {
+                    if (myFaction === 'p1') p1SelectedOrder = o;
+                    else p2SelectedOrder = o;
+                    selectedPath = [];
+                }
+            };
         });
 
-        let sbX = 450, sbY = 500, sbW = 480, sbH = 35;
-        ctx.fillStyle = '#00ff00'; ctx.fillRect(sbX, sbY, sbW, sbH);
-        ctx.fillStyle = '#000'; ctx.font = 'bold 14px monospace'; ctx.fillText("LOCK IN ORDERS FOR THIS ROUND", sbX + sbW / 2, sbY + 22);
-        uiButtons['LOCK_TURN_BTN'] = { x: sbX, y: sbY, w: sbW, h: sbH, action: () => { let order = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder; socket.emit('submit-turn', { faction: myFaction, order: order, path: selectedPath }); } };
+        let submitBtnX = 420;
+        let submitBtnY = 515;
+        let submitBtnW = 510;
+        let submitBtnH = 40;
+
+        ctx.fillStyle = isWaitingForCombatResolution ? '#444' : '#00ff00';
+        ctx.fillRect(submitBtnX, submitBtnY, submitBtnW, submitBtnH);
+
+        ctx.fillStyle = isWaitingForCombatResolution ? '#aaa' : '#000';
+        ctx.font = 'bold 14px monospace';
+        ctx.textAlign = 'center';
+        
+        let submitLabel = isWaitingForCombatResolution ? "WAITING FOR OPPONENT'S STRATEGY..." : "LOCK IN ORDERS FOR THIS ROUND";
+        ctx.fillText(submitLabel, submitBtnX + submitBtnW / 2, submitBtnY + 25);
+
+        if (!isWaitingForCombatResolution) {
+            uiButtons['LOCK_TURN_BTN'] = {
+                x: submitBtnX, y: submitBtnY, w: submitBtnW, h: submitBtnH,
+                action: () => {
+                    let order = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder;
+                    socket.emit('submit-turn', { faction: myFaction, order: order, path: selectedPath });
+                    isWaitingForCombatResolution = true; 
+                }
+            };
+        }
     }
 }
 
@@ -326,14 +386,15 @@ canvas.addEventListener('click', (event) => {
     for (let key in uiButtons) {
         let btn = uiButtons[key];
         if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-            btn.action(); clickedButton = true; break; 
+            btn.action(); 
+            clickedButton = true; 
+            break; 
         }
     }
 
     if (!clickedButton && myFaction !== 'spectator' && currentScene === 'ARENA' && matchActive) {
-        let gridOffsetX = 260, gridOffsetY = 90, cellSize = 75;
-        let cellX = Math.floor((mouseX - gridOffsetX) / cellSize);
-        let cellY = Math.floor((mouseY - gridOffsetY) / cellSize);
+        let cellX = Math.floor((mouseX - ARENA_GRID.offsetX) / ARENA_GRID.cellSize);
+        let cellY = Math.floor((mouseY - ARENA_GRID.offsetY) / ARENA_GRID.cellSize);
 
         if (cellX >= 0 && cellX < 6 && cellY >= 0 && cellY < 6) {
             let homeX = (myFaction === 'p1') ? p1X : p2X;
@@ -367,8 +428,33 @@ socket.on('lobby-status', (data) => {
 
 socket.on('transition-stage', (data) => {
     if (data.stage === 'merchant-guild') { currentScene = 'TAVERN'; generateNewTavernOffer(); }
-    if (data.stage === 'combat-arena') { p1Party = data.p1Party; p2Party = data.p2Party; isWaitingForOpponentDeployment = false; currentScene = 'ARENA'; }
+    if (data.stage === 'combat-arena') { 
+        p1Party = data.p1Party || p1Party; 
+        p2Party = data.p2Party || p2Party; 
+        isWaitingForOpponentDeployment = false; 
+        currentScene = 'ARENA'; 
+        if (logOverlay) logOverlay.style.display = 'block'; 
+    }
 });
 
-// Run Bootloader Engine
+socket.on('resolve-round', (data) => {
+    console.log("CRITICAL: Received official server combat execution packet:", data);
+
+    if (data.p1) { p1X = data.p1.x; p1Y = data.p1.y; }
+    if (data.p2) { p2X = data.p2.x; p2Y = data.p2.y; }
+
+    if (data.p1Party && Array.isArray(data.p1Party)) p1Party = data.p1Party;
+    if (data.p2Party && Array.isArray(data.p2Party)) p2Party = data.p2Party;
+
+    if (data.nextRound) currentRound = data.nextRound;
+    
+    isWaitingForCombatResolution = false; 
+    selectedPath = []; 
+
+    if (logOverlay && data.log) {
+        logOverlay.innerHTML += `<div style="margin-bottom: 6px; border-left: 2px solid #00ff00; padding-left: 6px; color: #00ff00; font-family: monospace;">${data.log}</div>`;
+        logOverlay.scrollTop = logOverlay.scrollHeight; 
+    }
+});
+
 loadGameAssets();
