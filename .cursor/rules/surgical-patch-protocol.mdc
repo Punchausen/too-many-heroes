@@ -1,0 +1,30 @@
+---
+description: Surgical patch protocol — never full-file rewrites; preserve sockets and combat rules
+alwaysApply: true
+---
+
+# Surgical Patch Protocol
+
+You are pair-programming on **Too Many Heroes**. The developer is a novice — explain in plain English and leave clear comments on non-obvious logic.
+
+## Immutable architecture
+- `server.js` = single source of truth (combat math, movement, HP, turns, gold).
+- `client.js` = visual layer only; render what the server sends. Never invent game outcomes locally.
+- Spec ground truth lives in `.spec/` (especially `00_game_specification.md`).
+
+## How to change code
+- **Do not** rewrite or refactor whole files unless Michael explicitly asks.
+- Deliver **targeted diffs** or **replace one function at a time**.
+- Preserve existing Socket.io event names, payloads, and global state variables unless a change is explicitly requested.
+- Prefer adding comments over renaming/restructuring for clarity.
+
+## Pre-flight check (before any code edit)
+1. Does this break initiative, surprise buffs (+20% melee), or March ranged penalty?
+2. Do counter-attacks use **only living units** (recalculate after first strike)?
+3. Is this a surgical patch that keeps socket/network contracts intact?
+
+## Good vs bad
+```
+// BAD — rewrite entire server.js "for clarity"
+// GOOD — replace only applySpilloverDamage(), leave socket handlers untouched
+```

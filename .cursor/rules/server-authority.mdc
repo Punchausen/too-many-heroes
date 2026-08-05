@@ -1,0 +1,26 @@
+---
+description: Server is the authority for all game math and state transitions
+globs: server.js
+alwaysApply: false
+---
+
+# Server Authority (`server.js`)
+
+This file owns the game. Clients only display results.
+
+## Must stay on the server
+- Movement validation (`validateMovementPath`)
+- Initiative (Seek > Advance > March; same order = simultaneous)
+- Ranged (distance 2) and melee (distance 1) combat
+- Spillover damage (highest `baseHp` first)
+- Room / hub state transitions and gold changes
+
+## Patch style
+- Edit the smallest function that fixes the bug or adds the feature.
+- Do not rename socket events (`JOIN_GAME`, `STATE_SYNC`, `submit-turn`, `resolve-round`, etc.) without an explicit request.
+- When adding logic, include short plain-English comments (what / why), especially around combat and state transitions.
+
+## Combat reminders
+- March → 0 ranged damage
+- Initiative strike gets `Math.floor(power * 1.2)` in melee; counter-strike does not
+- After first strike, defender power is recalculated from survivors only

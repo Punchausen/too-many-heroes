@@ -1,7 +1,20 @@
+// =============================================================================
+// TOO MANY HEROES — CLIENT (the "eyes and hands")
+// =============================================================================
+// Plain English: this file DRAWS the game and SENDS your clicks to the server.
+// It does NOT decide combat results, gold changes, or who won.
+// When the server says "your gold is 80", we show 80 — we don't invent a new number.
+//
+// Surgical patch protocol: change only the screen / button / listener you need.
+// Keep socket event names matching server.js.
+// =============================================================================
+
 // ==================== 1. GLOBAL STATE (RENDER CACHE FROM SERVER) ====================
+// These variables are a LOCAL COPY of server truth for drawing the UI.
+// Prefer updating them from STATE_SYNC / resolve-round — not from local guesses.
 const socket = io();
-let myFaction = null;
-let currentRoomState = 'LANDING';
+let myFaction = null;              // 'p1', 'p2', or 'spectator' (assigned by server)
+let currentRoomState = 'LANDING';  // which HTML screen is visible right now
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -9,6 +22,7 @@ const logOverlay = document.getElementById('combat-log-overlay');
 
 const Assets = {};
 
+// Display-only hero labels for cards. Real HP in combat comes from the server party arrays.
 const LOCAL_HERO_TEMPLATES = {
     'Peasant':   { hp: 30,  melee: 10, range: 0 },
     'Barbarian': { hp: 100, melee: 40, range: 0 },
@@ -17,6 +31,7 @@ const LOCAL_HERO_TEMPLATES = {
     'Knight':    { hp: 120, melee: 25, range: 0 }
 };
 
+// Maps server room-state names -> HTML element ids (only one screen is .active)
 const SCREEN_MAP = {
     'LANDING': 'screen-landing',
     'TOWN_HQ': 'screen-town-hq',
@@ -27,12 +42,12 @@ const SCREEN_MAP = {
 };
 
 let uiButtons = {};
-let isWaitingForOpponentLaunch = false;
+let isWaitingForOpponentLaunch = false; // true after you launch a quest and wait for the other player
 let matchActive = true;
 let currentRound = 1;
 let playerGold = 100;
 let playerName = '';
-let isWaitingForCombatResolution = false;
+let isWaitingForCombatResolution = false; // true after LOCK IN until resolve-round arrives
 
 const ARENA_GRID = { offsetX: 205, offsetY: 90, cellSize: 50, width: 11, height: 10 };
 
@@ -99,8 +114,9 @@ function renderHeroCards(container, heroes, mode) {
     }
 }
 
+// Apply a full server snapshot. This is the main "paint from truth" entry point.
 function applyStateSync(data) {
-    // roomState in STATE_SYNC is per-player during hub exploration
+    // During hub play, each player can be in a different room (Tavern vs Castle).
     if (data.roomState) switchScreen(data.roomState);
 
     if (data.lobby) {
@@ -195,6 +211,9 @@ function applyTavernSync(data) {
 }
 
 // ==================== 3. SOCKET ACTIONS ====================
+// Pattern for all of these: emit an INTENT to the server, then wait for STATE_SYNC
+// (or a specialized event) before trusting the new numbers on screen.
+
 function rerollTavernOffer() {
     socket.emit('tavern-reroll', { faction: myFaction });
 }
@@ -204,6 +223,7 @@ function hireTavernParty() {
 }
 
 function launchQuest() {
+    // We mark "waiting" locally for UX only; combat still starts only when the server says so.
     socket.emit('LAUNCH_QUEST', { questId: 'skirmish_patrol', partyId: 'party_1' });
     isWaitingForOpponentLaunch = true;
     renderSyncedUI();
@@ -215,6 +235,7 @@ function submitLobbyReady() {
 }
 
 function submitTurn() {
+    // Path preview was built by clicks below; server re-validates path length & adjacency.
     const order = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
     socket.emit('submit-turn', { faction: myFaction, order, path: selectedPath });
     isWaitingForCombatResolution = true;
@@ -371,6 +392,8 @@ function wireNavigationButtons() {
     document.getElementById('btn-lock-turn').addEventListener('click', submitTurn);
 }
 
+// Arena click = build a PATH PREVIEW for your warband.
+// This is a helpful draft for the player. The server still validates the path on submit-turn.
 canvas.addEventListener('click', (event) => {
     if (currentRoomState !== 'TACTICAL_ARENA' || myFaction === 'spectator' || !matchActive) return;
 
@@ -385,9 +408,11 @@ canvas.addEventListener('click', (event) => {
         const homeX = myFaction === 'p1' ? p1X : p2X;
         const homeY = myFaction === 'p1' ? p1Y : p2Y;
         const currentOrder = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
+        // Local preview of order capacity (must stay in sync with server ORDER_CAPACITIES)
         const distances = { Seek: 1, Advance: 2, March: 3 };
         const maxCapacity = distances[currentOrder];
 
+        // Clicking an already-selected cell trims the path back to that point
         const existingIndex = selectedPath.findIndex(c => c.x === cellX && c.y === cellY);
         if (existingIndex !== -1) { selectedPath = selectedPath.slice(0, existingIndex); return; }
         if (selectedPath.length >= maxCapacity) return;
@@ -395,6 +420,7 @@ canvas.addEventListener('click', (event) => {
         const anchorX = selectedPath.length === 0 ? homeX : selectedPath[selectedPath.length - 1].x;
         const anchorY = selectedPath.length === 0 ? homeY : selectedPath[selectedPath.length - 1].y;
 
+        // Only allow one step to an adjacent (non-diagonal) cell
         if (Math.abs(cellX - anchorX) + Math.abs(cellY - anchorY) === 1) {
             selectedPath.push({ x: cellX, y: cellY });
         }
@@ -402,6 +428,9 @@ canvas.addEventListener('click', (event) => {
 });
 
 // ==================== 6. SOCKET LISTENERS (PRESERVED + NEW) ====================
+// Listeners = "the server told us something changed; update the picture."
+// Do not compute combat outcomes here — only apply payloads from the server.
+
 socket.on('assign-player', (data) => { myFaction = data.faction; });
 
 socket.on('lobby-status', (data) => {

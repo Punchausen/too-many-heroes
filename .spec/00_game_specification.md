@@ -13,6 +13,7 @@
    - No code refactoring unless explicitly requested.
    - Code updates must be delivered as targeted diffs or surgical function replacements.
    - All state changes must preserve preexisting networking parameters and global state variables.
+   - **Enforcement:** Cursor agents must follow `.cursor/rules/surgical-patch-protocol.mdc` and `AGENTS.md` (plain-English guide for novice developers).
 
 ---
 

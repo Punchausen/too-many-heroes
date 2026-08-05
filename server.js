@@ -1,32 +1,50 @@
+// =============================================================================
+// TOO MANY HEROES — SERVER (the "brain" of the game)
+// =============================================================================
+// Plain English: this file decides what is TRUE in the game.
+// - Combat damage, movement, gold, and which screen you're on all live HERE.
+// - The browser (client.js) only DRAWS what we send it — it does not invent results.
+//
+// Surgical patch protocol: when changing this file, edit the smallest function
+// that needs fixing. Do not rewrite the whole file unless explicitly asked.
+// =============================================================================
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+// Socket.io = live two-way messaging between this server and each browser tab
 const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(express.static(__dirname + '/public'));
 app.get('/', (req, res) => { res.sendFile(__dirname + '/public/index.html'); });
 
 // --- SYSTEM STATE BOUNDARIES ---
-let players = {};
+// These variables are the shared "save game" for the current match.
+// Both players' browsers get copies of pieces of this via STATE_SYNC events.
+let players = {};                       // socket ids for p1 / p2
 let readyStatus = { p1: false, p2: false };
-let currentRoundMoves = {};
+let currentRoundMoves = {};             // holds each player's locked orders for this round
 let gameStarted = false;
 let currentRound = 1;
 let roomState = 'LANDING'; // Session phase: LANDING | HUB | TACTICAL_ARENA | GAME_OVER
 
+// Warband positions on the arena grid (server is the authority)
 let p1Pos = { x: 1, y: 2 };
 let p2Pos = { x: 9, y: 7 };
 let p1Party = [];
 let p2Party = [];
 
+// Hub rooms players can walk between (Castle / Tavern / Town HQ)
 const NAVIGABLE_ROOMS = ['TOWN_HQ', 'TAVERN', 'CASTLE'];
+// Lower number = acts FIRST. Seek is fastest; March is slowest.
 const INITIATIVE_ORDER = { 'Seek': 1, 'Advance': 2, 'March': 3 };
+// How many grid cells that order may move in one round
 const ORDER_CAPACITIES = { 'Seek': 1, 'Advance': 2, 'March': 3 };
-const GRID_MAX_X = 10;
-const GRID_MAX_Y = 9;
+const GRID_MAX_X = 10; // grid is 0..10 in X (11 columns)
+const GRID_MAX_Y = 9;  // grid is 0..9 in Y (10 rows)
 
 const HERO_TEMPLATES = {
     'Peasant':   { hp: 30,  melee: 10, range: 0 },
@@ -61,6 +79,8 @@ function ownsFaction(socket, faction) {
     return (faction === 'p1' || faction === 'p2') && players[faction] === socket.id;
 }
 
+// Pack a snapshot of "what the client should show right now".
+// The client must treat this as read-only truth — it should not invent new values.
 function buildStateSync(faction) {
     const ps = faction ? playerState[faction] : null;
     return {
@@ -186,6 +206,8 @@ function normalizeSquad(party) {
         .map(u => unitFromTemplate(u.role));
 }
 
+// Clients may DRAW a path, but the server RECHECKS it so cheats / bugs cannot move too far.
+// Rules: stay on the grid, move one cell at a time (no diagonals), and respect order capacity.
 function validateMovementPath(startPos, path, order) {
     if (!Array.isArray(path)) return [];
     const maxCapacity = ORDER_CAPACITIES[order] || 2;
@@ -195,6 +217,7 @@ function validateMovementPath(startPos, path, order) {
         const cell = path[i];
         if (typeof cell.x !== 'number' || typeof cell.y !== 'number') break;
         if (cell.x < 0 || cell.x > GRID_MAX_X || cell.y < 0 || cell.y > GRID_MAX_Y) break;
+        // Manhattan distance of 1 = orthogonally adjacent (up/down/left/right only)
         if (Math.abs(cell.x - ax) + Math.abs(cell.y - ay) !== 1) break;
         valid.push({ x: cell.x, y: cell.y });
         ax = cell.x;
@@ -348,11 +371,18 @@ io.on('connection', (socket) => {
 });
 
 // ==================== TACTICAL COMBAT RESOLVER ENGINE ====================
+// Called only after BOTH players have locked in their orders for the round.
+// Order of operations (do not rearrange without updating the spec):
+//   1) Move both warbands to the end of their validated paths
+//   2) Measure distance (Manhattan: |dx| + |dy|)
+//   3) Decide who acts first (initiative), or both at once if same order
+//   4) Fight at range (distance 2) or melee (distance 1), or just maneuver
 function resolveRoundSimulation() {
     let p1Move = currentRoundMoves['p1'];
     let p2Move = currentRoundMoves['p2'];
 
     // 1. Resolve Movement Positions (Rule 3.2)
+    // Final cell of the path becomes the new official position.
     if (p1Move.path && p1Move.path.length > 0) p1Pos = p1Move.path[p1Move.path.length - 1];
     if (p2Move.path && p2Move.path.length > 0) p2Pos = p2Move.path[p2Move.path.length - 1];
 
@@ -360,6 +390,7 @@ function resolveRoundSimulation() {
     let roundLog = `[ROUND ${currentRound} RESOLUTION] <br> P1 chose ${p1Move.order} -> End Pos: (${p1Pos.x},${p1Pos.y})<br> P2 chose ${p2Move.order} -> End Pos: (${p2Pos.x},${p2Pos.y})<br>`;
 
     // 2. Initiative Calculations (Rule 3.3)
+    // Smaller initiative number wins (Seek=1 beats Advance=2 beats March=3).
     let p1Init = INITIATIVE_ORDER[p1Move.order] || 2;
     let p2Init = INITIATIVE_ORDER[p2Move.order] || 2;
 
@@ -369,8 +400,11 @@ function resolveRoundSimulation() {
 
     let getAlive = (party) => party.filter(u => u.hp > 0);
 
-    // Helper functions to grab actual current power dynamically mid-step
+    // Power helpers ALWAYS filter to living units first.
+    // That matters for counter-attacks: after the first strike, dead heroes
+    // must not still contribute damage (no "zombie shooting").
     let getRangedPower = (party, order) => {
+        // March = sprinting; you cannot shoot while Marching.
         if (order === 'March') return 0;
         let sum = 0;
         getAlive(party).forEach(u => sum += (u.range || 0));
@@ -378,6 +412,7 @@ function resolveRoundSimulation() {
     };
 
     let getMeleePower = (party) => {
+        // In melee, every living hero joins in (melee + range stats combined).
         let sum = 0;
         getAlive(party).forEach(u => sum += ((u.melee || 0) + (u.range || 0)));
         return sum;
@@ -469,6 +504,10 @@ function resolveRoundSimulation() {
 }
 
 // ==================== SPILLOVER DAMAGE LOOPS (Rule 3.6) ====================
+// Plain English "tanking" rule:
+// Damage always hits the living hero with the HIGHEST baseHp first (the big tank).
+// If that hero dies and damage is left over, leftovers "spill" onto the next tank.
+// Repeat until damage is spent or the whole party is unconscious.
 function applySpilloverDamage(party, totalDamage, appendLog, attackerLabel) {
     let remainingDmg = totalDamage;
     if (remainingDmg <= 0) return;
@@ -477,7 +516,7 @@ function applySpilloverDamage(party, totalDamage, appendLog, attackerLabel) {
         let aliveUnits = party.filter(u => u.hp > 0);
         if (aliveUnits.length === 0) break;
 
-        // Force tank allocation via highest base health descending order
+        // Sort toughest baseline first (baseHp, not current hp)
         aliveUnits.sort((a, b) => b.baseHp - a.baseHp);
         let currentTank = aliveUnits[0];
 

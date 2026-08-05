@@ -1,0 +1,24 @@
+---
+description: Client is a renderer — no local combat authority
+globs: public/js/client.js,public/index.html
+alwaysApply: false
+---
+
+# Client Renderer (`client.js`)
+
+The browser draws the game. It does **not** decide who wins a fight.
+
+## Allowed
+- UI clicks that **emit** intents to the server (`JOIN_GAME`, `NAVIGATE_TO`, `submit-turn`, etc.)
+- Path preview for the player (server still validates the real path)
+- Rendering from `STATE_SYNC`, `ROOM_TRANSITION`, `resolve-round`, and related server events
+
+## Forbidden without explicit request
+- Local combat damage math that becomes “truth”
+- Skipping screens or changing room state without a server event
+- Changing gold / HP / party composition locally as authoritative state
+
+## Patch style
+- Touch only the UI / listener / draw function you need.
+- Keep socket listener names and payload shapes aligned with the server.
+- Comment non-obvious UI state flags (e.g. `isWaitingForCombatResolution`) in plain English.
