@@ -1,15 +1,227 @@
-// ==================== 1. GLOBAL SELF-CONTAINED GAME STATE ====================
+// ==================== 1. GLOBAL STATE (RENDER CACHE FROM SERVER) ====================
 const socket = io();
 let myFaction = null;
+let currentRoomState = 'LANDING';
 
-// Setup Canvas Viewport Context Layers
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const logOverlay = document.getElementById('combat-log-overlay');
 
-// Asset Storage Cache
 const Assets = {};
 
+const LOCAL_HERO_TEMPLATES = {
+    'Peasant':   { hp: 30,  melee: 10, range: 0 },
+    'Barbarian': { hp: 100, melee: 40, range: 0 },
+    'Elf':       { hp: 50,  melee: 15, range: 25 },
+    'Mage':      { hp: 40,  melee: 10, range: 35 },
+    'Knight':    { hp: 120, melee: 25, range: 0 }
+};
+
+const SCREEN_MAP = {
+    'LANDING': 'screen-landing',
+    'TOWN_HQ': 'screen-town-hq',
+    'TAVERN': 'screen-tavern',
+    'CASTLE': 'screen-castle',
+    'TACTICAL_ARENA': 'screen-tactical-arena',
+    'GAME_OVER': 'screen-game-over'
+};
+
+let uiButtons = {};
+let isWaitingForOpponentLaunch = false;
+let matchActive = true;
+let currentRound = 1;
+let playerGold = 100;
+let playerName = '';
+let isWaitingForCombatResolution = false;
+
+const ARENA_GRID = { offsetX: 205, offsetY: 90, cellSize: 50, width: 11, height: 10 };
+
+const ARENA_TILE_COLORS = {
+    LG:  '#b5c96e',
+    DG:  '#2e6b3e',
+    DGY: '#4a4a4a',
+    RED: '#d62828',
+    LGY: '#9a9a9a'
+};
+
+const ARENA_TILE_MAP = [
+    ['LG','LG','LG','LG','DG','DG','LG','LG','LG','DG','DG'],
+    ['LG','LG','LG','LG','DG','DG','LG','LG','LGY','DG','DG'],
+    ['LG','RED','DGY','LG','LG','LG','LG','LGY','LGY','LG','LG'],
+    ['DG','LG','DGY','DG','DG','LG','LG','LG','LGY','LG','LG'],
+    ['DG','LG','DGY','LG','LG','LG','DG','DG','DG','LG','LG'],
+    ['LG','LG','DGY','DGY','DGY','DGY','DGY','DGY','DGY','LG','DG'],
+    ['LG','LG','LG','LG','LG','DG','DG','DG','DGY','LG','DG'],
+    ['LG','LG','LGY','LGY','LG','LG','LG','LG','DGY','RED','LG'],
+    ['DG','DG','LGY','DG','LG','DG','DG','LG','LG','LG','LG'],
+    ['DG','DG','LG','LG','LG','DG','DG','LG','LG','LG','LG']
+];
+
+let p1Party = [];
+let p2Party = [];
+let currentTavernOffer = [];
+let currentTavernCost = 0;
+let myDraftParty = [];
+
+let p1X = 1, p1Y = 2;
+let p2X = 9, p2Y = 7;
+let selectedPath = [];
+let p1SelectedOrder = 'Advance';
+let p2SelectedOrder = 'Advance';
+
+let lobbyStatusText = { p1: 'DISCONNECTED', p2: 'DISCONNECTED', readyP1: false, readyP2: false };
+
+// ==================== 2. SCREEN SWITCHER & STATE SYNC RENDER ====================
+function switchScreen(newState) {
+    currentRoomState = newState;
+    document.querySelectorAll('.game-screen').forEach(el => el.classList.remove('active'));
+    const screenId = SCREEN_MAP[newState];
+    if (screenId) document.getElementById(screenId).classList.add('active');
+}
+
+function heroAttackLabel(stats) {
+    return stats.range > 0 ? `🏹${stats.range} Ranged` : `⚔${stats.melee} Melee`;
+}
+
+function renderHeroCards(container, heroes, mode) {
+    if (!container) return;
+    container.innerHTML = '';
+    heroes.forEach(h => {
+        const card = document.createElement('div');
+        card.className = 'hero-card';
+        const stats = LOCAL_HERO_TEMPLATES[h.role] || h;
+        const hpText = h.hp !== undefined ? (h.hp > 0 ? `${h.hp}/${h.baseHp} HP` : 'UNCONSCIOUS') : `${stats.hp} HP`;
+        card.innerHTML = `<h4>${h.role.toUpperCase()}</h4><p>❤ ${hpText} | ${heroAttackLabel(stats)}</p>`;
+        container.appendChild(card);
+    });
+    if (heroes.length === 0 && mode === 'roster') {
+        container.innerHTML = '<p style="color:#888;">No heroes recruited yet.</p>';
+    }
+}
+
+function applyStateSync(data) {
+    // roomState in STATE_SYNC is per-player during hub exploration
+    if (data.roomState) switchScreen(data.roomState);
+
+    if (data.lobby) {
+        lobbyStatusText.p1 = data.lobby.players.p1 ? 'CONNECTED' : 'DISCONNECTED';
+        lobbyStatusText.p2 = data.lobby.players.p2 ? 'CONNECTED' : 'DISCONNECTED';
+        lobbyStatusText.readyP1 = data.lobby.readyStatus.p1;
+        lobbyStatusText.readyP2 = data.lobby.readyStatus.p2;
+        const p1El = document.getElementById('landing-p1-status');
+        const p2El = document.getElementById('landing-p2-status');
+        if (p1El) p1El.textContent = lobbyStatusText.p1 === 'DISCONNECTED' ? 'DISCONNECTED' : (lobbyStatusText.readyP1 ? 'READY!' : 'CONNECTED');
+        if (p2El) p2El.textContent = lobbyStatusText.p2 === 'DISCONNECTED' ? 'DISCONNECTED' : (lobbyStatusText.readyP2 ? 'READY!' : 'CONNECTED');
+    }
+
+    if (data.player && data.player.faction === myFaction) {
+        playerGold = data.player.gold;
+        currentTavernOffer = data.player.offer || [];
+        currentTavernCost = data.player.cost || 0;
+        myDraftParty = data.player.draftParty || [];
+        playerName = data.player.playerName || playerName;
+        if (myFaction === 'p1') p1Party = myDraftParty.length ? myDraftParty : p1Party;
+        if (myFaction === 'p2') p2Party = myDraftParty.length ? myDraftParty : p2Party;
+    }
+
+    if (data.arena) {
+        if (data.arena.currentRound) currentRound = data.arena.currentRound;
+        if (data.arena.p1Party && data.arena.p1Party.length) p1Party = data.arena.p1Party;
+        if (data.arena.p2Party && data.arena.p2Party.length) p2Party = data.arena.p2Party;
+        if (data.arena.p1Pos) { p1X = data.arena.p1Pos.x; p1Y = data.arena.p1Pos.y; }
+        if (data.arena.p2Pos) { p2X = data.arena.p2Pos.x; p2Y = data.arena.p2Pos.y; }
+    }
+
+    renderSyncedUI();
+}
+
+function renderSyncedUI() {
+    const goldIds = ['hq-gold', 'tavern-gold', 'castle-gold'];
+    goldIds.forEach(id => { const el = document.getElementById(id); if (el) el.textContent = playerGold; });
+
+    const nameEl = document.getElementById('hq-player-name');
+    if (nameEl) nameEl.textContent = playerName || 'Hero';
+
+    const myParty = myFaction === 'p1' ? p1Party : p2Party;
+    renderHeroCards(document.getElementById('tavern-roster'), myParty, 'roster');
+    renderHeroCards(document.getElementById('tavern-offer'), currentTavernOffer, 'offer');
+    renderHeroCards(document.getElementById('castle-party-slots'), myParty, 'roster');
+
+    const hireBtn = document.getElementById('btn-hire-party');
+    if (hireBtn) {
+        hireBtn.textContent = `HIRE PARTY (${currentTavernCost}g)`;
+        hireBtn.disabled = playerGold < currentTavernCost || currentTavernOffer.length === 0;
+    }
+    const rerollBtn = document.getElementById('btn-reroll-offer');
+    if (rerollBtn) rerollBtn.disabled = playerGold < 5;
+
+    const roundLabel = document.getElementById('arena-round-label');
+    if (roundLabel) roundLabel.textContent = `ROUND: ${currentRound} / 4`;
+
+    const waitEl = document.getElementById('castle-quest-wait');
+    if (waitEl) waitEl.style.display = isWaitingForOpponentLaunch ? 'block' : 'none';
+
+    const launchBtn = document.getElementById('btn-launch-quest');
+    if (launchBtn) launchBtn.disabled = isWaitingForOpponentLaunch;
+
+    updateOrderButtons();
+    updateLockTurnButton();
+}
+
+function updateOrderButtons() {
+    const currentOrder = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
+    document.querySelectorAll('.order-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.order === currentOrder);
+    });
+}
+
+function updateLockTurnButton() {
+    const btn = document.getElementById('btn-lock-turn');
+    if (!btn) return;
+    btn.disabled = isWaitingForCombatResolution || myFaction === 'spectator';
+    btn.textContent = isWaitingForCombatResolution
+        ? "WAITING FOR OPPONENT'S STRATEGY..."
+        : 'LOCK IN ORDERS FOR THIS ROUND';
+}
+
+function applyTavernSync(data) {
+    playerGold = data.gold;
+    currentTavernOffer = data.offer;
+    currentTavernCost = data.cost;
+    if (myFaction === 'p1') p1Party = data.party;
+    if (myFaction === 'p2') p2Party = data.party;
+    myDraftParty = data.party;
+    renderSyncedUI();
+}
+
+// ==================== 3. SOCKET ACTIONS ====================
+function rerollTavernOffer() {
+    socket.emit('tavern-reroll', { faction: myFaction });
+}
+
+function hireTavernParty() {
+    socket.emit('tavern-hire', { faction: myFaction });
+}
+
+function launchQuest() {
+    socket.emit('LAUNCH_QUEST', { questId: 'skirmish_patrol', partyId: 'party_1' });
+    isWaitingForOpponentLaunch = true;
+    renderSyncedUI();
+}
+
+function submitLobbyReady() {
+    if (myFaction === 'spectator') return;
+    socket.emit('player-ready', { faction: myFaction });
+}
+
+function submitTurn() {
+    const order = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
+    socket.emit('submit-turn', { faction: myFaction, order, path: selectedPath });
+    isWaitingForCombatResolution = true;
+    updateLockTurnButton();
+}
+
+// ==================== 4. ARENA CANVAS (TACTICAL ARENA ONLY) ====================
 function generateColorPlaceholder(color, width, height) {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = width;
@@ -22,344 +234,72 @@ function generateColorPlaceholder(color, width, height) {
     return img;
 }
 
-const LOCAL_HERO_TEMPLATES = {
-    'Peasant':   { hp: 30,  melee: 10, range: 0 },
-    'Barbarian': { hp: 100, melee: 40, range: 0 },
-    'Elf':       { hp: 50,  melee: 15, range: 25 },
-    'Mage':      { hp: 40,  melee: 10, range: 35 },
-    'Knight':    { hp: 120, melee: 25, range: 0 }
-};
-
-// State Properties
-let uiButtons = {}; 
-let isWaitingForOpponentDeployment = false;
-let currentScene = 'TITLE'; 
-let matchActive = true;
-let currentRound = 1;
-let playerGold = 100;
-let isWaitingForCombatResolution = false;
-
-// UNIFIED MASTER GRID METRICS
-const ARENA_GRID = {
-    offsetX: 290,
-    offsetY: 80,
-    cellSize: 65
-};
-
-let p1Party = [ {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0} ];
-let p2Party = [ {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0}, {role:'Peasant', hp:30, baseHp:30, melee:10, range:0} ];
-let currentTavernOffer = [];
-let currentTavernCost = 0;
-
-let p1X = 0, p1Y = 2;
-let p2X = 5, p2Y = 3;
-let selectedPath = [];
-let p1SelectedOrder = 'Advance';
-let p2SelectedOrder = 'Advance';
-
-let lobbyStatusText = { p1: 'DISCONNECTED', p2: 'DISCONNECTED', readyP1: false, readyP2: false };
-
-// ==================== 2. CORE TRANSACTIONAL TRANSMISSION LOGIC ====================
-function generateNewTavernOffer() {
-    const pool = ['Barbarian', 'Elf', 'Mage', 'Knight', 'Peasant'];
-    currentTavernOffer = [];
-    let basePartyCost = 0;
-
-    for (let i = 0; i < 4; i++) {
-        let randomClass = pool[Math.floor(Math.random() * pool.length)];
-        let fixedBaseCost = 10; 
-
-        currentTavernOffer.push({ role: randomClass, cost: fixedBaseCost });
-        basePartyCost += fixedBaseCost;
-    }
-
-    let macroVariance = Math.floor(Math.random() * 21) - 10; 
-    currentTavernCost = Math.max(0, basePartyCost + macroVariance); 
-}
-
-function rerollTavernOffer() {
-    if (playerGold < 5) return;
-    playerGold -= 5;
-    generateNewTavernOffer();
-}
-
-function hireTavernParty() {
-    if (playerGold < currentTavernCost) return;
-    playerGold -= currentTavernCost;
-
-    let purchasedSquad = currentTavernOffer.map(h => ({
-        role: h.role,
-        hp: LOCAL_HERO_TEMPLATES[h.role].hp,
-        baseHp: LOCAL_HERO_TEMPLATES[h.role].hp,
-        melee: LOCAL_HERO_TEMPLATES[h.role].melee,
-        range: LOCAL_HERO_TEMPLATES[h.role].range
-    }));
-
-    if (myFaction === 'p1') p1Party = purchasedSquad;
-    if (myFaction === 'p2') p2Party = purchasedSquad;
-
-    generateNewTavernOffer(); 
-}
-
-function lockAndDeploySquad() {
-    let finalSquad = (myFaction === 'p1') ? p1Party : p2Party;
-    socket.emit('deploy-squad', { faction: myFaction, party: finalSquad });
-    isWaitingForOpponentDeployment = true;
-}
-
-function submitLobbyReady() {
-    if (myFaction === 'spectator') return;
-    socket.emit('player-ready', { faction: myFaction });
-}
-
-// ==================== 3. GRAPHICS PAINT VISUALIZATIONS ====================
-function drawTitleScreen() {
-    if (Assets['bg_title']) ctx.drawImage(Assets['bg_title'], 0, 0);
-
-    ctx.fillStyle = '#ff9800';
-    ctx.font = 'bold 54px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText("TOO MANY HEROES", canvas.width / 2, 180);
-    
-    ctx.fillStyle = '#888888';
-    ctx.font = '16px monospace';
-    ctx.fillText("HTML5 CANVAS PROTOTYPE", canvas.width / 2, 220);
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.fillRect(280, 260, 400, 140);
-    ctx.strokeRect(280, 260, 400, 140);
-
-    ctx.textAlign = 'left';
-    ctx.font = '16px monospace';
-    
-    ctx.fillStyle = '#fff';
-    ctx.fillText("PLAYER 1: ", 310, 310);
-    if (lobbyStatusText.p1 === 'DISCONNECTED') { ctx.fillStyle = '#ff3333'; ctx.fillText("DISCONNECTED", 420, 310); }
-    else { ctx.fillStyle = lobbyStatusText.readyP1 ? '#00ff00' : '#ffff00'; ctx.fillText(lobbyStatusText.readyP1 ? "READY!" : "CHOOSING...", 420, 310); }
-
-    ctx.fillStyle = '#fff';
-    ctx.fillText("PLAYER 2: ", 310, 350);
-    if (lobbyStatusText.p2 === 'DISCONNECTED') { ctx.fillStyle = '#ff3333'; ctx.fillText("DISCONNECTED", 420, 350); }
-    else { ctx.fillStyle = lobbyStatusText.readyP2 ? '#00ff00' : '#ffff00'; ctx.fillText(lobbyStatusText.readyP2 ? "READY!" : "CHOOSING...", 420, 350); }
-
-    let btnX = canvas.width / 2 - 120;
-    let btnY = 460;
-    let btnW = 240;
-    let btnH = 50;
-    
-    let isReadyButtonDisabled = (myFaction === 'spectator' || (myFaction === 'p1' && lobbyStatusText.readyP1) || (myFaction === 'p2' && lobbyStatusText.readyP2));
-    ctx.drawImage(isReadyButtonDisabled ? Assets['btn_disabled'] : Assets['btn_normal'], btnX, btnY, btnW, btnH);
-    
-    ctx.fillStyle = '#000';
-    ctx.font = 'bold 16px monospace';
-    ctx.textAlign = 'center';
-    
-    let label = "READY UP FOR BATTLE";
-    if (myFaction === 'spectator') label = "SPECTATOR MODE";
-    else if (myFaction === 'p1' && lobbyStatusText.readyP1) label = "WAITING FOR P2...";
-    else if (myFaction === 'p2' && lobbyStatusText.readyP2) label = "WAITING FOR P1...";
-    ctx.fillText(label, canvas.width / 2, btnY + 30);
-
-    if (!isReadyButtonDisabled) {
-        uiButtons['READY_BTN'] = { x: btnX, y: btnY, w: btnW, h: btnH, action: submitLobbyReady };
-    }
-}
-
-function drawTavernScreen() {
+function drawArenaScreen() {
     ctx.fillStyle = '#1e1e1e';
     ctx.fillRect(0, 0, canvas.width, 60);
-    ctx.strokeStyle = '#ff9800';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(0, 60); ctx.lineTo(canvas.width, 60); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('TOO MANY HEROES - COMBAT ARENA', 20, 38);
+    ctx.fillStyle = '#ff9800';
+    ctx.textAlign = 'right';
+    ctx.fillText(`ROUND: ${currentRound} / 4`, canvas.width - 20, 38);
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#00ffff';
+    ctx.fillText('PLAYER 1 (CYAN)', 30, 95);
+    p1Party.forEach((h, idx) => {
+        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555';
+        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, 30, 120 + (idx * 22));
+    });
 
     ctx.fillStyle = '#ff9800';
-    ctx.font = 'bold 22px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText("THE TAVERN RECRUITMENT MARKET", 20, 38);
-
-    ctx.fillStyle = '#ffff00';
-    ctx.textAlign = 'right';
-    ctx.fillText(`Gold: ${playerGold}g`, canvas.width - 20, 38);
-
-    let panelY = 80, panelH = 425, leftPanelX = 30, panelW = 430, rightPanelX = 500;
-
-    // Left Box
-    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(leftPanelX, panelY, panelW, panelH);
-    ctx.strokeStyle = '#333'; ctx.strokeRect(leftPanelX, panelY, panelW, panelH);
-    ctx.fillStyle = '#00ffff'; ctx.font = 'bold 16px monospace'; ctx.textAlign = 'left';
-    ctx.fillText("Your Active Warband Roster", leftPanelX + 15, panelY + 25);
-
-    let myCurrentParty = (myFaction === 'p1') ? p1Party : p2Party;
-    myCurrentParty.forEach((h, idx) => {
-        let cardY = panelY + 40 + (idx * 72);
-        ctx.fillStyle = '#222'; ctx.fillRect(leftPanelX + 15, cardY, panelW - 30, 60);
-        ctx.strokeStyle = '#444'; ctx.strokeRect(leftPanelX + 15, cardY, panelW - 30, 60);
-        
-        let hpText = h.hp > 0 ? `${h.hp}/${h.baseHp} HP` : `UNCONSCIOUS`;
+    ctx.fillText('PLAYER 2 (ORANGE)', canvas.width - 220, 95);
+    p2Party.forEach((h, idx) => {
         ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555';
-        ctx.font = 'bold 14px monospace'; ctx.fillText(h.role.toUpperCase(), leftPanelX + 30, cardY + 25);
-        ctx.font = '12px monospace'; ctx.fillStyle = '#aaa';
-        let attackLabel = h.range > 0 ? `🏹${h.range} Ranged` : `⚔${h.melee} Melee`;
-        ctx.fillText(`❤ ${hpText}  |  ${attackLabel}`, leftPanelX + 30, cardY + 45);
+        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, canvas.width - 220, 120 + (idx * 22));
     });
 
-    // Right Box
-    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(rightPanelX, panelY, panelW, panelH);
-    ctx.strokeStyle = '#ff9800'; ctx.strokeRect(rightPanelX, panelY, panelW, panelH);
-    ctx.fillStyle = '#ff9800'; ctx.font = 'bold 16px monospace'; ctx.fillText("Available Mercenary Contract", rightPanelX + 15, panelY + 25);
+    for (let y = 0; y < ARENA_GRID.height; y++) {
+        for (let x = 0; x < ARENA_GRID.width; x++) {
+            const cx = ARENA_GRID.offsetX + (x * ARENA_GRID.cellSize);
+            const cy = ARENA_GRID.offsetY + (y * ARENA_GRID.cellSize);
+            const tile = ARENA_TILE_MAP[y][x];
 
-    currentTavernOffer.forEach((h, idx) => {
-        let cardY = panelY + 40 + (idx * 72);
-        ctx.fillStyle = '#222'; ctx.fillRect(rightPanelX + 15, cardY, panelW - 30, 60);
-        ctx.strokeStyle = '#333'; ctx.strokeRect(rightPanelX + 15, cardY, panelW - 30, 60);
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.fillText(h.role.toUpperCase(), rightPanelX + 30, cardY + 25);
-        let stats = LOCAL_HERO_TEMPLATES[h.role];
-        let attackLabel = stats.range > 0 ? `🏹${stats.range} Ranged` : `⚔${stats.melee} Melee`;
-        ctx.font = '12px monospace'; ctx.fillStyle = '#aaa'; ctx.fillText(`❤ ${stats.hp} HP  |  ${attackLabel}`, rightPanelX + 30, cardY + 45);
-    });
-
-    let btnY = panelY + panelH - 55, btnW = 185, btnH = 40;
-
-    let canAffordHire = (playerGold >= currentTavernCost && currentTavernOffer.length > 0);
-    ctx.fillStyle = canAffordHire ? '#ff9800' : '#444'; ctx.fillRect(rightPanelX + 15, btnY, btnW, btnH);
-    ctx.fillStyle = '#000'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
-    ctx.fillText(`HIRE PARTY (${currentTavernCost}g)`, rightPanelX + 15 + btnW / 2, btnY + 24);
-    uiButtons['HIRE_BTN'] = { x: rightPanelX + 15, y: btnY, w: btnW, h: btnH, action: () => { if (canAffordHire) hireTavernParty(); } };
-
-    let canAffordReroll = (playerGold >= 5);
-    let rerollX = rightPanelX + panelW - 15 - btnW;
-    ctx.fillStyle = canAffordReroll ? '#555' : '#222'; ctx.fillRect(rerollX, btnY, btnW, btnH);
-    ctx.fillStyle = canAffordReroll ? '#fff' : '#555'; ctx.fillText("REROLL (5g)", rerollX + btnW / 2, btnY + 24);
-    uiButtons['REROLL_BTN'] = { x: rerollX, y: btnY, w: btnW, h: btnH, action: () => { if (canAffordReroll) rerollTavernOffer(); } };
-
-    let battleBtnX = 30, battleBtnY = 530, battleBtnW = 900, battleBtnH = 55;
-    ctx.fillStyle = '#ff9800'; ctx.fillRect(battleBtnX, battleBtnY, battleBtnW, battleBtnH);
-    ctx.fillStyle = '#000'; ctx.font = 'bold 20px monospace'; ctx.fillText("TO BATTLE!", battleBtnX + battleBtnW / 2, battleBtnY + 34);
-    uiButtons['DEPLOY_BTN'] = { x: battleBtnX, y: battleBtnY, w: battleBtnW, h: battleBtnH, action: lockAndDeploySquad };
-
-    if (isWaitingForOpponentDeployment) {
-        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#ff9800'; ctx.font = 'bold 24px monospace'; ctx.fillText("Waiting for opponent to finish drafting...", canvas.width / 2, canvas.height / 2);
-    }
-}
-
-function drawArenaScreen() {
-    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, canvas.width, 60);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'left'; ctx.fillText("TOO MANY HEROES - COMBAT ARENA", 20, 38);
-    ctx.fillStyle = '#ff9800'; ctx.textAlign = 'right'; ctx.fillText(`ROUND: ${currentRound} / 4`, canvas.width - 20, 38);
-
-    ctx.textAlign = 'left'; ctx.font = 'bold 14px monospace';
-    ctx.fillStyle = '#00ffff'; ctx.fillText("PLAYER 1 (CYAN)", 30, 95);
-    p1Party.forEach((h, idx) => { 
-        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555'; 
-        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, 30, 120 + (idx * 22)); 
-    });
-
-    ctx.fillStyle = '#ff9800'; ctx.fillText("PLAYER 2 (ORANGE)", canvas.width - 220, 95);
-    p2Party.forEach((h, idx) => { 
-        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555'; 
-        ctx.fillText(`• ${h.role} (${h.hp}/${h.baseHp} HP)`, canvas.width - 220, 120 + (idx * 22)); 
-    });
-
-    // Render Matrix Utilizing the Shared Global Properties
-    for (let y = 0; y < 6; y++) {
-        for (let x = 0; x < 6; x++) {
-            let cx = ARENA_GRID.offsetX + (x * ARENA_GRID.cellSize);
-            let cy = ARENA_GRID.offsetY + (y * ARENA_GRID.cellSize);
-            
-            ctx.fillStyle = '#111'; ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
-            ctx.strokeStyle = '#222'; ctx.strokeRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
-            ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.fillText(`(${x},${y})`, cx + ARENA_GRID.cellSize / 2, cy + 20);
+            ctx.fillStyle = ARENA_TILE_COLORS[tile] || ARENA_TILE_COLORS.LG;
+            ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+            ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+            ctx.strokeRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
 
             if (selectedPath.some(c => c.x === x && c.y === y)) {
-                ctx.fillStyle = (myFaction === 'p1') ? 'rgba(0, 255, 255, 0.25)' : 'rgba(255, 152, 0, 0.25)';
+                ctx.fillStyle = myFaction === 'p1' ? 'rgba(0, 255, 255, 0.35)' : 'rgba(255, 152, 0, 0.35)';
                 ctx.fillRect(cx + 2, cy + 2, ARENA_GRID.cellSize - 4, ARENA_GRID.cellSize - 4);
             }
             if (x === p1X && y === p1Y) {
-                ctx.fillStyle = '#00ffff'; ctx.fillRect(cx + 10, cy + 25, ARENA_GRID.cellSize - 20, 35);
-                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P1", cx + ARENA_GRID.cellSize / 2, cy + 48);
+                ctx.fillStyle = '#00ffff';
+                ctx.fillRect(cx + 6, cy + 14, ARENA_GRID.cellSize - 12, ARENA_GRID.cellSize - 22);
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 14px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('P1', cx + ARENA_GRID.cellSize / 2, cy + ARENA_GRID.cellSize - 8);
             } else if (x === p2X && y === p2Y) {
-                ctx.fillStyle = '#ff9800'; ctx.fillRect(cx + 10, cy + 25, ARENA_GRID.cellSize - 20, 35);
-                ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace'; ctx.fillText("P2", cx + ARENA_GRID.cellSize / 2, cy + 48);
+                ctx.fillStyle = '#ff9800';
+                ctx.fillRect(cx + 6, cy + 14, ARENA_GRID.cellSize - 12, ARENA_GRID.cellSize - 22);
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 14px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('P2', cx + ARENA_GRID.cellSize / 2, cy + ARENA_GRID.cellSize - 8);
             }
-        }
-    }
-
-    if (myFaction !== 'spectator') {
-        let currentOrder = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder;
-        
-        ctx.fillStyle = '#fff';
-        ctx.font = '14px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText("CHOOSE DIRECTIVE ORDER ACTION:", 30, 495);
-
-        const orders = ['Seek', 'Advance', 'March'];
-        orders.forEach((o, idx) => {
-            let bx = 30 + (idx * 125);
-            let by = 515;
-            let bw = 110;
-            let bh = 40;
-
-            ctx.fillStyle = (currentOrder === o) ? '#ff9800' : '#222';
-            ctx.fillRect(bx, by, bw, bh);
-            ctx.strokeStyle = '#444';
-            ctx.strokeRect(bx, by, bw, bh);
-
-            ctx.fillStyle = (currentOrder === o) ? '#000' : '#fff';
-            ctx.font = 'bold 12px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(o.toUpperCase(), bx + bw / 2, by + 24);
-
-            uiButtons[`ORDER_${o.toUpperCase()}`] = {
-                x: bx, y: by, w: bw, h: bh,
-                action: () => {
-                    if (myFaction === 'p1') p1SelectedOrder = o;
-                    else p2SelectedOrder = o;
-                    selectedPath = [];
-                }
-            };
-        });
-
-        let submitBtnX = 420;
-        let submitBtnY = 515;
-        let submitBtnW = 510;
-        let submitBtnH = 40;
-
-        ctx.fillStyle = isWaitingForCombatResolution ? '#444' : '#00ff00';
-        ctx.fillRect(submitBtnX, submitBtnY, submitBtnW, submitBtnH);
-
-        ctx.fillStyle = isWaitingForCombatResolution ? '#aaa' : '#000';
-        ctx.font = 'bold 14px monospace';
-        ctx.textAlign = 'center';
-        
-        let submitLabel = isWaitingForCombatResolution ? "WAITING FOR OPPONENT'S STRATEGY..." : "LOCK IN ORDERS FOR THIS ROUND";
-        ctx.fillText(submitLabel, submitBtnX + submitBtnW / 2, submitBtnY + 25);
-
-        if (!isWaitingForCombatResolution) {
-            uiButtons['LOCK_TURN_BTN'] = {
-                x: submitBtnX, y: submitBtnY, w: submitBtnW, h: submitBtnH,
-                action: () => {
-                    let order = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder;
-                    socket.emit('submit-turn', { faction: myFaction, order: order, path: selectedPath });
-                    isWaitingForCombatResolution = true; 
-                }
-            };
         }
     }
 }
 
-// ==================== 4. CORE PIPELINE CONTROLLER ====================
 function renderActiveScene() {
+    if (currentRoomState !== 'TACTICAL_ARENA') return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    uiButtons = {}; 
-
-    switch(currentScene) {
-        case 'TITLE': drawTitleScreen(); break;
-        case 'TAVERN': drawTavernScreen(); break;
-        case 'ARENA': drawArenaScreen(); break;
-    }
+    uiButtons = {};
+    drawArenaScreen();
 }
 
 function startGameLoop() {
@@ -369,54 +309,99 @@ function startGameLoop() {
 
 function loadGameAssets() {
     Assets['bg_title'] = generateColorPlaceholder('#1a0f00', 960, 640);
-    Assets['btn_normal'] = generateColorPlaceholder('#ff9800', 240, 50);
-    Assets['btn_disabled'] = generateColorPlaceholder('#444444', 240, 50);
-    
-    generateNewTavernOffer();
     startGameLoop();
+    switchScreen('LANDING');
 }
 
-// ==================== 5. EVENT LISTENERS ====================
+// ==================== 5. DOM EVENT WIRING ====================
+function setJoinWaitingState(waiting) {
+    const joinBtn = document.getElementById('btn-join-game');
+    const nameInput = document.getElementById('input-player-name');
+    const codeInput = document.getElementById('input-room-code');
+    if (!joinBtn) return;
+
+    joinBtn.disabled = waiting;
+    joinBtn.textContent = waiting ? 'Waiting for other player' : 'JOIN GAME';
+    if (nameInput) nameInput.disabled = waiting;
+    if (codeInput) codeInput.disabled = waiting;
+}
+
+function wireNavigationButtons() {
+    document.getElementById('btn-join-game').addEventListener('click', () => {
+        const joinBtn = document.getElementById('btn-join-game');
+        if (joinBtn.disabled) return;
+
+        const name = document.getElementById('input-player-name').value.trim();
+        const code = document.getElementById('input-room-code').value.trim();
+        if (!name || !code) return;
+
+        setJoinWaitingState(true);
+        socket.emit('JOIN_GAME', { playerName: name, roomCode: code });
+    });
+
+    document.getElementById('btn-go-tavern').addEventListener('click', () => {
+        socket.emit('NAVIGATE_TO', { targetRoom: 'TAVERN' });
+    });
+    document.getElementById('btn-go-castle').addEventListener('click', () => {
+        socket.emit('NAVIGATE_TO', { targetRoom: 'CASTLE' });
+    });
+    document.getElementById('btn-tavern-return-hq').addEventListener('click', () => {
+        socket.emit('NAVIGATE_TO', { targetRoom: 'TOWN_HQ' });
+    });
+    document.getElementById('btn-castle-return-hq').addEventListener('click', () => {
+        socket.emit('NAVIGATE_TO', { targetRoom: 'TOWN_HQ' });
+    });
+    document.getElementById('btn-return-to-hq').addEventListener('click', () => {
+        socket.emit('RETURN_TO_HQ', {});
+    });
+
+    document.getElementById('btn-hire-party').addEventListener('click', hireTavernParty);
+    document.getElementById('btn-reroll-offer').addEventListener('click', rerollTavernOffer);
+    document.getElementById('btn-launch-quest').addEventListener('click', launchQuest);
+
+    document.querySelectorAll('.order-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const order = btn.dataset.order;
+            if (myFaction === 'p1') p1SelectedOrder = order;
+            else if (myFaction === 'p2') p2SelectedOrder = order;
+            selectedPath = [];
+            updateOrderButtons();
+        });
+    });
+    document.getElementById('btn-lock-turn').addEventListener('click', submitTurn);
+}
+
 canvas.addEventListener('click', (event) => {
+    if (currentRoomState !== 'TACTICAL_ARENA' || myFaction === 'spectator' || !matchActive) return;
+
     const rect = canvas.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
     const mouseY = event.clientY - rect.top;
 
-    let clickedButton = false;
-    for (let key in uiButtons) {
-        let btn = uiButtons[key];
-        if (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h) {
-            btn.action(); 
-            clickedButton = true; 
-            break; 
-        }
-    }
+    const cellX = Math.floor((mouseX - ARENA_GRID.offsetX) / ARENA_GRID.cellSize);
+    const cellY = Math.floor((mouseY - ARENA_GRID.offsetY) / ARENA_GRID.cellSize);
 
-    if (!clickedButton && myFaction !== 'spectator' && currentScene === 'ARENA' && matchActive) {
-        let cellX = Math.floor((mouseX - ARENA_GRID.offsetX) / ARENA_GRID.cellSize);
-        let cellY = Math.floor((mouseY - ARENA_GRID.offsetY) / ARENA_GRID.cellSize);
+    if (cellX >= 0 && cellX < ARENA_GRID.width && cellY >= 0 && cellY < ARENA_GRID.height) {
+        const homeX = myFaction === 'p1' ? p1X : p2X;
+        const homeY = myFaction === 'p1' ? p1Y : p2Y;
+        const currentOrder = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
+        const distances = { Seek: 1, Advance: 2, March: 3 };
+        const maxCapacity = distances[currentOrder];
 
-        if (cellX >= 0 && cellX < 6 && cellY >= 0 && cellY < 6) {
-            let homeX = (myFaction === 'p1') ? p1X : p2X;
-            let homeY = (myFaction === 'p1') ? p1Y : p2Y;
-            let currentOrder = (myFaction === 'p1') ? p1SelectedOrder : p2SelectedOrder;
-            const distances = { 'Seek': 1, 'Advance': 2, 'March': 3 };
-            let maxCapacity = distances[currentOrder];
+        const existingIndex = selectedPath.findIndex(c => c.x === cellX && c.y === cellY);
+        if (existingIndex !== -1) { selectedPath = selectedPath.slice(0, existingIndex); return; }
+        if (selectedPath.length >= maxCapacity) return;
 
-            let existingIndex = selectedPath.findIndex(c => c.x === cellX && c.y === cellY);
-            if (existingIndex !== -1) { selectedPath = selectedPath.slice(0, existingIndex); return; }
-            if (selectedPath.length >= maxCapacity) return;
+        const anchorX = selectedPath.length === 0 ? homeX : selectedPath[selectedPath.length - 1].x;
+        const anchorY = selectedPath.length === 0 ? homeY : selectedPath[selectedPath.length - 1].y;
 
-            let anchorX = (selectedPath.length === 0) ? homeX : selectedPath[selectedPath.length - 1].x;
-            let anchorY = (selectedPath.length === 0) ? homeY : selectedPath[selectedPath.length - 1].y;
-
-            if (Math.abs(cellX - anchorX) + Math.abs(cellY - anchorY) === 1) {
-                selectedPath.push({ x: cellX, y: cellY });
-            }
+        if (Math.abs(cellX - anchorX) + Math.abs(cellY - anchorY) === 1) {
+            selectedPath.push({ x: cellX, y: cellY });
         }
     }
 });
 
+// ==================== 6. SOCKET LISTENERS (PRESERVED + NEW) ====================
 socket.on('assign-player', (data) => { myFaction = data.faction; });
 
 socket.on('lobby-status', (data) => {
@@ -424,37 +409,56 @@ socket.on('lobby-status', (data) => {
     lobbyStatusText.p2 = data.players.p2 ? 'CONNECTED' : 'DISCONNECTED';
     lobbyStatusText.readyP1 = data.readyStatus.p1;
     lobbyStatusText.readyP2 = data.readyStatus.p2;
+    renderSyncedUI();
 });
 
+socket.on('ROOM_TRANSITION', (payload) => {
+    switchScreen(payload.newState);
+});
+
+socket.on('STATE_SYNC', (data) => { applyStateSync(data); });
+
 socket.on('transition-stage', (data) => {
-    if (data.stage === 'merchant-guild') { currentScene = 'TAVERN'; generateNewTavernOffer(); }
-    if (data.stage === 'combat-arena') { 
-        p1Party = data.p1Party || p1Party; 
-        p2Party = data.p2Party || p2Party; 
-        isWaitingForOpponentDeployment = false; 
-        currentScene = 'ARENA'; 
-        if (logOverlay) logOverlay.style.display = 'block'; 
+    if (data.stage === 'merchant-guild') switchScreen('TAVERN');
+    if (data.stage === 'combat-arena') {
+        if (data.p1Party) p1Party = data.p1Party;
+        if (data.p2Party) p2Party = data.p2Party;
+        isWaitingForOpponentLaunch = false;
+        switchScreen('TACTICAL_ARENA');
+        renderSyncedUI();
     }
+});
+
+socket.on('tavern-sync', (data) => { applyTavernSync(data); });
+
+socket.on('GAME_OVER_SUMMARY', (data) => {
+    switchScreen('GAME_OVER');
+    const banner = document.getElementById('game-over-banner');
+    if (banner) {
+        banner.textContent = data.result;
+        banner.className = 'outcome-banner ' + (data.result === 'VICTORY' ? 'outcome-victory' : 'outcome-defeat');
+    }
+    const goldEl = document.getElementById('game-over-gold');
+    if (goldEl) goldEl.textContent = data.goldEarned;
 });
 
 socket.on('resolve-round', (data) => {
-    console.log("CRITICAL: Received official server combat execution packet:", data);
-
     if (data.p1) { p1X = data.p1.x; p1Y = data.p1.y; }
     if (data.p2) { p2X = data.p2.x; p2Y = data.p2.y; }
-
     if (data.p1Party && Array.isArray(data.p1Party)) p1Party = data.p1Party;
     if (data.p2Party && Array.isArray(data.p2Party)) p2Party = data.p2Party;
-
     if (data.nextRound) currentRound = data.nextRound;
-    
-    isWaitingForCombatResolution = false; 
-    selectedPath = []; 
+
+    isWaitingForCombatResolution = false;
+    selectedPath = [];
+    updateLockTurnButton();
+    renderSyncedUI();
 
     if (logOverlay && data.log) {
         logOverlay.innerHTML += `<div style="margin-bottom: 6px; border-left: 2px solid #00ff00; padding-left: 6px; color: #00ff00; font-family: monospace;">${data.log}</div>`;
-        logOverlay.scrollTop = logOverlay.scrollHeight; 
+        logOverlay.scrollTop = logOverlay.scrollHeight;
     }
 });
 
+wireNavigationButtons();
 loadGameAssets();

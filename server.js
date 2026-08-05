@@ -15,13 +15,195 @@ let readyStatus = { p1: false, p2: false };
 let currentRoundMoves = {};
 let gameStarted = false;
 let currentRound = 1;
+let roomState = 'LANDING'; // Session phase: LANDING | HUB | TACTICAL_ARENA | GAME_OVER
 
-let p1Pos = { x: 0, y: 2 };
-let p2Pos = { x: 5, y: 3 };
+let p1Pos = { x: 1, y: 2 };
+let p2Pos = { x: 9, y: 7 };
 let p1Party = [];
 let p2Party = [];
 
+const NAVIGABLE_ROOMS = ['TOWN_HQ', 'TAVERN', 'CASTLE'];
 const INITIATIVE_ORDER = { 'Seek': 1, 'Advance': 2, 'March': 3 };
+const ORDER_CAPACITIES = { 'Seek': 1, 'Advance': 2, 'March': 3 };
+const GRID_MAX_X = 10;
+const GRID_MAX_Y = 9;
+
+const HERO_TEMPLATES = {
+    'Peasant':   { hp: 30,  melee: 10, range: 0 },
+    'Barbarian': { hp: 100, melee: 40, range: 0 },
+    'Elf':       { hp: 50,  melee: 15, range: 25 },
+    'Mage':      { hp: 40,  melee: 10, range: 35 },
+    'Knight':    { hp: 120, melee: 25, range: 0 }
+};
+
+const TAVERN_POOL = ['Barbarian', 'Elf', 'Mage', 'Knight', 'Peasant'];
+
+let playerState = {
+    p1: { gold: 100, offer: [], cost: 0, draftParty: [], playerName: '', roomCode: '', currentRoom: 'TOWN_HQ' },
+    p2: { gold: 100, offer: [], cost: 0, draftParty: [], playerName: '', roomCode: '', currentRoom: 'TOWN_HQ' }
+};
+
+function getPlayerRoomState(faction) {
+    if (roomState === 'LANDING') return 'LANDING';
+    if (roomState === 'TACTICAL_ARENA') return 'TACTICAL_ARENA';
+    if (roomState === 'GAME_OVER') return 'GAME_OVER';
+    if (faction && playerState[faction]) return playerState[faction].currentRoom || 'TOWN_HQ';
+    return 'TOWN_HQ';
+}
+
+function getFactionForSocket(socket) {
+    if (players.p1 === socket.id) return 'p1';
+    if (players.p2 === socket.id) return 'p2';
+    return null;
+}
+
+function ownsFaction(socket, faction) {
+    return (faction === 'p1' || faction === 'p2') && players[faction] === socket.id;
+}
+
+function buildStateSync(faction) {
+    const ps = faction ? playerState[faction] : null;
+    return {
+        roomState: getPlayerRoomState(faction),
+        player: ps ? {
+            faction,
+            playerName: ps.playerName,
+            gold: ps.gold,
+            offer: ps.offer,
+            cost: ps.cost,
+            draftParty: ps.draftParty,
+            currentRoom: ps.currentRoom
+        } : null,
+        arena: {
+            currentRound,
+            p1Party,
+            p2Party,
+            p1Pos,
+            p2Pos
+        },
+        lobby: { readyStatus, players }
+    };
+}
+
+function emitStateSyncTo(socket) {
+    const faction = getFactionForSocket(socket);
+    socket.emit('STATE_SYNC', buildStateSync(faction));
+}
+
+function emitStateSyncAll() {
+    if (players.p1) io.to(players.p1).emit('STATE_SYNC', buildStateSync('p1'));
+    if (players.p2) io.to(players.p2).emit('STATE_SYNC', buildStateSync('p2'));
+}
+
+function transitionSession(newState) {
+    roomState = newState;
+    io.emit('ROOM_TRANSITION', { newState });
+    emitStateSyncAll();
+}
+
+function navigatePlayer(faction, targetRoom) {
+    playerState[faction].currentRoom = targetRoom;
+    if (players[faction]) {
+        io.to(players[faction]).emit('ROOM_TRANSITION', { newState: targetRoom });
+        io.to(players[faction]).emit('STATE_SYNC', buildStateSync(faction));
+    }
+}
+
+function enterHubPhase() {
+    roomState = 'HUB';
+    playerState.p1.currentRoom = 'TOWN_HQ';
+    playerState.p2.currentRoom = 'TOWN_HQ';
+    if (players.p1) io.to(players.p1).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+    if (players.p2) io.to(players.p2).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+    emitStateSyncAll();
+}
+
+function resetArenaState() {
+    currentRound = 1;
+    p1Pos = { x: 1, y: 2 };
+    p2Pos = { x: 9, y: 7 };
+    p1Party = [];
+    p2Party = [];
+    currentRoundMoves = {};
+}
+
+function bothPlayersJoinedSameRoom() {
+    return players.p1 && players.p2
+        && playerState.p1.playerName
+        && playerState.p2.playerName
+        && playerState.p1.roomCode === playerState.p2.roomCode;
+}
+
+function defaultPeasantSquad() {
+    return Array.from({ length: 4 }, () => unitFromTemplate('Peasant'));
+}
+
+function unitFromTemplate(role) {
+    const t = HERO_TEMPLATES[role];
+    return { role, hp: t.hp, baseHp: t.hp, melee: t.melee, range: t.range };
+}
+
+function generateTavernOffer() {
+    const offer = [];
+    let basePartyCost = 0;
+    for (let i = 0; i < 4; i++) {
+        const role = TAVERN_POOL[Math.floor(Math.random() * TAVERN_POOL.length)];
+        offer.push({ role, cost: 10 });
+        basePartyCost += 10;
+    }
+    const macroVariance = Math.floor(Math.random() * 21) - 10;
+    return { offer, cost: Math.max(0, basePartyCost + macroVariance) };
+}
+
+function initPlayerState() {
+    const p1Name = playerState.p1.playerName;
+    const p2Name = playerState.p2.playerName;
+    const p1Code = playerState.p1.roomCode;
+    const p2Code = playerState.p2.roomCode;
+    const p1Room = playerState.p1.currentRoom || 'TOWN_HQ';
+    const p2Room = playerState.p2.currentRoom || 'TOWN_HQ';
+    playerState.p1 = { gold: 100, ...generateTavernOffer(), draftParty: defaultPeasantSquad(), playerName: p1Name, roomCode: p1Code, currentRoom: p1Room };
+    playerState.p2 = { gold: 100, ...generateTavernOffer(), draftParty: defaultPeasantSquad(), playerName: p2Name, roomCode: p2Code, currentRoom: p2Room };
+}
+
+function emitTavernSync(faction) {
+    if (!players[faction]) return;
+    const ps = playerState[faction];
+    io.to(players[faction]).emit('tavern-sync', {
+        gold: ps.gold,
+        offer: ps.offer,
+        cost: ps.cost,
+        party: ps.draftParty
+    });
+    io.to(players[faction]).emit('STATE_SYNC', buildStateSync(faction));
+}
+
+function normalizeSquad(party) {
+    if (!Array.isArray(party)) return [];
+    return party
+        .slice(0, 4)
+        .filter(u => u && HERO_TEMPLATES[u.role])
+        .map(u => unitFromTemplate(u.role));
+}
+
+function validateMovementPath(startPos, path, order) {
+    if (!Array.isArray(path)) return [];
+    const maxCapacity = ORDER_CAPACITIES[order] || 2;
+    const valid = [];
+    let ax = startPos.x, ay = startPos.y;
+    for (let i = 0; i < path.length && valid.length < maxCapacity; i++) {
+        const cell = path[i];
+        if (typeof cell.x !== 'number' || typeof cell.y !== 'number') break;
+        if (cell.x < 0 || cell.x > GRID_MAX_X || cell.y < 0 || cell.y > GRID_MAX_Y) break;
+        if (Math.abs(cell.x - ax) + Math.abs(cell.y - ay) !== 1) break;
+        valid.push({ x: cell.x, y: cell.y });
+        ax = cell.x;
+        ay = cell.y;
+    }
+    return valid;
+}
+
+initPlayerState();
 
 io.on('connection', (socket) => {
     if (gameStarted) {
@@ -37,41 +219,108 @@ io.on('connection', (socket) => {
     }
 
     io.emit('lobby-status', { readyStatus, players });
+    emitStateSyncTo(socket);
 
-    socket.on('player-ready', (data) => {
-        if (data.faction === 'p1' || data.faction === 'p2') {
-            readyStatus[data.faction] = true;
-            io.emit('lobby-status', { readyStatus, players });
+    socket.on('JOIN_GAME', (data) => {
+        const faction = getFactionForSocket(socket);
+        if (!faction || roomState !== 'LANDING') return;
+        if (!data.playerName || !data.roomCode) return;
 
-            if (readyStatus.p1 && readyStatus.p2) {
-                gameStarted = true;
-                currentRound = 1;
-                p1Pos = { x: 0, y: 2 };
-                p2Pos = { x: 5, y: 3 };
-                io.emit('transition-stage', { stage: 'merchant-guild' });
-            }
+        playerState[faction].playerName = String(data.playerName).trim();
+        playerState[faction].roomCode = String(data.roomCode).trim();
+
+        if (bothPlayersJoinedSameRoom()) {
+            gameStarted = true;
+            initPlayerState();
+            resetArenaState();
+            enterHubPhase();
+        } else {
+            emitStateSyncTo(socket);
         }
     });
 
-    socket.on('deploy-squad', (data) => {
-        if (data.faction === 'p1' || data.faction === 'p2') {
-            if (data.faction === 'p1') p1Party = data.party;
-            if (data.faction === 'p2') p2Party = data.party;
-            console.log(`Squad Synced: ${data.faction} locked in their team composition.`);
+    socket.on('NAVIGATE_TO', (data) => {
+        const faction = getFactionForSocket(socket);
+        if (!faction) return;
+        if (roomState === 'TACTICAL_ARENA' || roomState === 'LANDING' || roomState === 'GAME_OVER') return;
+        if (!NAVIGABLE_ROOMS.includes(data.targetRoom)) return;
+        navigatePlayer(faction, data.targetRoom);
+    });
 
-            if (p1Party.length && p2Party.length) {
-                io.emit('transition-stage', { 
-                    stage: 'combat-arena',
-                    p1Party: p1Party,
-                    p2Party: p2Party
-                });
-            }
+    socket.on('RETURN_TO_HQ', () => {
+        if (!getFactionForSocket(socket)) return;
+        if (roomState !== 'GAME_OVER') return;
+        resetArenaState();
+        readyStatus = { p1: false, p2: false };
+        gameStarted = true;
+        initPlayerState();
+        playerState.p1.currentRoom = 'TOWN_HQ';
+        playerState.p2.currentRoom = 'TOWN_HQ';
+        roomState = 'HUB';
+        if (players.p1) io.to(players.p1).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+        if (players.p2) io.to(players.p2).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+        emitStateSyncAll();
+    });
+
+    socket.on('LAUNCH_QUEST', (data) => {
+        const faction = getFactionForSocket(socket);
+        if (!faction || roomState !== 'HUB' || playerState[faction].currentRoom !== 'CASTLE') return;
+        const squad = normalizeSquad(playerState[faction].draftParty);
+        if (!squad.length) return;
+
+        if (faction === 'p1') p1Party = squad;
+        if (faction === 'p2') p2Party = squad;
+
+        if (p1Party.length && p2Party.length) {
+            roomState = 'TACTICAL_ARENA';
+            io.emit('ROOM_TRANSITION', { newState: 'TACTICAL_ARENA' });
+            io.emit('transition-stage', {
+                stage: 'combat-arena',
+                p1Party: p1Party,
+                p2Party: p2Party
+            });
+            emitStateSyncAll();
         }
+    });
+
+    socket.on('player-ready', (data) => {
+        if (!ownsFaction(socket, data.faction)) return;
+        readyStatus[data.faction] = true;
+        io.emit('lobby-status', { readyStatus, players });
+        emitStateSyncAll();
+    });
+
+    socket.on('tavern-reroll', (data) => {
+        if (!gameStarted || !ownsFaction(socket, data.faction)) return;
+        const ps = playerState[data.faction];
+        if (ps.gold < 5) return;
+        ps.gold -= 5;
+        const fresh = generateTavernOffer();
+        ps.offer = fresh.offer;
+        ps.cost = fresh.cost;
+        emitTavernSync(data.faction);
+    });
+
+    socket.on('tavern-hire', (data) => {
+        if (!gameStarted || !ownsFaction(socket, data.faction)) return;
+        const ps = playerState[data.faction];
+        if (ps.gold < ps.cost || ps.offer.length === 0) return;
+        ps.gold -= ps.cost;
+        ps.draftParty = ps.offer.map(h => unitFromTemplate(h.role));
+        const fresh = generateTavernOffer();
+        ps.offer = fresh.offer;
+        ps.cost = fresh.cost;
+        emitTavernSync(data.faction);
     });
 
     socket.on('submit-turn', (data) => {
-        if (!gameStarted) return;
-        currentRoundMoves[data.faction] = { order: data.order, path: data.path };
+        if (!gameStarted || !ownsFaction(socket, data.faction)) return;
+        if (currentRoundMoves[data.faction]) return;
+
+        const order = INITIATIVE_ORDER[data.order] ? data.order : 'Advance';
+        const startPos = data.faction === 'p1' ? p1Pos : p2Pos;
+        const path = validateMovementPath(startPos, data.path, order);
+        currentRoundMoves[data.faction] = { order, path };
 
         if (currentRoundMoves['p1'] && currentRoundMoves['p2']) {
             resolveRoundSimulation();
@@ -81,8 +330,20 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         if (players['p1'] === socket.id) { players['p1'] = null; readyStatus.p1 = false; }
         if (players['p2'] === socket.id) { players['p2'] = null; readyStatus.p2 = false; }
-        if (!players['p1'] && !players['p2']) { gameStarted = false; p1Party = []; p2Party = []; currentRoundMoves = {}; }
+        if (!players['p1'] && !players['p2']) {
+            gameStarted = false;
+            roomState = 'LANDING';
+            resetArenaState();
+            initPlayerState();
+            playerState.p1.playerName = '';
+            playerState.p2.playerName = '';
+            playerState.p1.roomCode = '';
+            playerState.p2.roomCode = '';
+            playerState.p1.currentRoom = 'TOWN_HQ';
+            playerState.p2.currentRoom = 'TOWN_HQ';
+        }
         io.emit('lobby-status', { readyStatus, players });
+        emitStateSyncAll();
     });
 });
 
