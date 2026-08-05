@@ -17,3 +17,19 @@ This document defines the overarching state machine for "Too Many Heroes" Milest
 ## 1.4 State Guardrails
 - State transitions MUST originate from the server.
 - The client cannot jump directly from LANDING to TACTICAL_ARENA without active player state validation.
+
+## 1.5 Sub-State Navigation Rules
+- Room navigation between sub-states (`TOWN_HQ`, `TAVERN`, `CASTLE`) is bi-directional using the `NAVIGATE_TO` socket event[cite: 1, 3].
+- `TAVERN` and `CASTLE` screens MUST provide explicit UI controls returning directly to `TOWN_HQ`[cite: 3].
+- `TACTICAL_ARENA` can ONLY be entered from `CASTLE` via `LAUNCH_QUEST`[cite: 1, 3].
+- While in `TACTICAL_ARENA`, room navigation is locked until combat completes (`COMBAT_END`)[cite: 3, 5].
+- `GAME_OVER` displays match outcomes and provides a `RETURN_TO_HQ` action back to `TOWN_HQ`[cite: 1, 3].
+
+## 1.6 DOM Container Screen Map
+The client interface consists of 6 primary container elements. Only the element corresponding to the active server room state shall be displayed:
+- `#screen-landing` -> [1. LANDING][cite: 3]
+- `#screen-town-hq` -> [2. TOWN_HQ][cite: 3]
+- `#screen-tavern` -> [3. TAVERN][cite: 3]
+- `#screen-castle` -> [4. CASTLE][cite: 3]
+- `#screen-tactical-arena` -> [5. TACTICAL_ARENA][cite: 3]
+- `#screen-game-over` -> [6. GAME_OVER][cite: 3]

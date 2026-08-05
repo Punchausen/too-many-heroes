@@ -51,6 +51,9 @@ let isWaitingForCombatResolution = false; // true after LOCK IN until resolve-ro
 
 const ARENA_GRID = { offsetX: 205, offsetY: 90, cellSize: 50, width: 11, height: 10 };
 
+// Colour legend (must match server.js ARENA_TILE_MAP):
+// Light Green (LG) = Grass | Dark Green (DG) = Forest | Light Grey (LGY) = Mountain
+// Dark Grey (DGY) = Road | Red (RED) = Building
 const ARENA_TILE_COLORS = {
     LG:  '#b5c96e',
     DG:  '#2e6b3e',
@@ -71,6 +74,8 @@ const ARENA_TILE_MAP = [
     ['DG','DG','LGY','DG','LG','DG','DG','LG','LG','LG','LG'],
     ['DG','DG','LG','LG','LG','DG','DG','LG','LG','LG','LG']
 ];
+// Mountains and Buildings cannot be walked on (preview only — server enforces for real)
+const BLOCKED_TILES = { RED: true, LGY: true };
 
 let p1Party = [];
 let p2Party = [];
@@ -78,8 +83,9 @@ let currentTavernOffer = [];
 let currentTavernCost = 0;
 let myDraftParty = [];
 
-let p1X = 1, p1Y = 2;
-let p2X = 9, p2Y = 7;
+// Defaults match server starts: P1 north of west building, P2 south of east building
+let p1X = 1, p1Y = 1;
+let p2X = 9, p2Y = 8;
 let selectedPath = [];
 let p1SelectedOrder = 'Advance';
 let p2SelectedOrder = 'Advance';
@@ -198,6 +204,29 @@ function updateLockTurnButton() {
     btn.textContent = isWaitingForCombatResolution
         ? "WAITING FOR OPPONENT'S STRATEGY..."
         : 'LOCK IN ORDERS FOR THIS ROUND';
+}
+
+// --- Terrain helpers for PATH PREVIEW (keep identical to server.js helpers) ---
+function getClientTileAt(x, y) {
+    if (y < 0 || y >= ARENA_TILE_MAP.length) return null;
+    if (x < 0 || x >= ARENA_TILE_MAP[y].length) return null;
+    return ARENA_TILE_MAP[y][x];
+}
+
+function isClientBlockedTile(x, y) {
+    const tile = getClientTileAt(x, y);
+    return !tile || BLOCKED_TILES[tile] === true;
+}
+
+// How far you can path this turn, based on the tile you START on.
+// Road +1, Forest -1 (min 1). Same math as server getMovementCapacity.
+function getClientMovementCapacity(order, startX, startY) {
+    const base = { Seek: 1, Advance: 2, March: 3 };
+    let capacity = base[order] || 2;
+    const tile = getClientTileAt(startX, startY);
+    if (tile === 'DGY') capacity += 1;
+    else if (tile === 'DG') capacity = Math.max(1, capacity - 1);
+    return capacity;
 }
 
 function applyTavernSync(data) {
@@ -408,14 +437,15 @@ canvas.addEventListener('click', (event) => {
         const homeX = myFaction === 'p1' ? p1X : p2X;
         const homeY = myFaction === 'p1' ? p1Y : p2Y;
         const currentOrder = myFaction === 'p1' ? p1SelectedOrder : p2SelectedOrder;
-        // Local preview of order capacity (must stay in sync with server ORDER_CAPACITIES)
-        const distances = { Seek: 1, Advance: 2, March: 3 };
-        const maxCapacity = distances[currentOrder];
+        // Capacity uses STARTING tile (Road/Forest), matching server getMovementCapacity
+        const maxCapacity = getClientMovementCapacity(currentOrder, homeX, homeY);
 
         // Clicking an already-selected cell trims the path back to that point
         const existingIndex = selectedPath.findIndex(c => c.x === cellX && c.y === cellY);
         if (existingIndex !== -1) { selectedPath = selectedPath.slice(0, existingIndex); return; }
         if (selectedPath.length >= maxCapacity) return;
+        // Buildings and Mountains: never add to the preview path
+        if (isClientBlockedTile(cellX, cellY)) return;
 
         const anchorX = selectedPath.length === 0 ? homeX : selectedPath[selectedPath.length - 1].x;
         const anchorY = selectedPath.length === 0 ? homeY : selectedPath[selectedPath.length - 1].y;

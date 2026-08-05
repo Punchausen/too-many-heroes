@@ -31,9 +31,11 @@ let gameStarted = false;
 let currentRound = 1;
 let roomState = 'LANDING'; // Session phase: LANDING | HUB | TACTICAL_ARENA | GAME_OVER
 
-// Warband positions on the arena grid (server is the authority)
-let p1Pos = { x: 1, y: 2 };
-let p2Pos = { x: 9, y: 7 };
+// Warband positions on the arena grid (server is the authority).
+// Starts: Cyan (P1) one tile NORTH of the west building; Orange (P2) one tile SOUTH of the east building.
+// Grid y=0 is the top/north edge of the map.
+let p1Pos = { x: 1, y: 1 };
+let p2Pos = { x: 9, y: 8 };
 let p1Party = [];
 let p2Party = [];
 
@@ -41,10 +43,27 @@ let p2Party = [];
 const NAVIGABLE_ROOMS = ['TOWN_HQ', 'TAVERN', 'CASTLE'];
 // Lower number = acts FIRST. Seek is fastest; March is slowest.
 const INITIATIVE_ORDER = { 'Seek': 1, 'Advance': 2, 'March': 3 };
-// How many grid cells that order may move in one round
+// Base how many grid cells that order may move in one round (terrain can modify this)
 const ORDER_CAPACITIES = { 'Seek': 1, 'Advance': 2, 'March': 3 };
 const GRID_MAX_X = 10; // grid is 0..10 in X (11 columns)
 const GRID_MAX_Y = 9;  // grid is 0..9 in Y (10 rows)
+
+// --- TERRAIN MAP (must stay in sync with public/js/client.js ARENA_TILE_MAP) ---
+// Colour legend: LG=Grass, DG=Forest, DGY=Road, LGY=Mountain, RED=Building
+// Mountains and Buildings are IMPASSABLE — parties cannot start, cross, or end on them.
+const ARENA_TILE_MAP = [
+    ['LG','LG','LG','LG','DG','DG','LG','LG','LG','DG','DG'],
+    ['LG','LG','LG','LG','DG','DG','LG','LG','LGY','DG','DG'],
+    ['LG','RED','DGY','LG','LG','LG','LG','LGY','LGY','LG','LG'],
+    ['DG','LG','DGY','DG','DG','LG','LG','LG','LGY','LG','LG'],
+    ['DG','LG','DGY','LG','LG','LG','DG','DG','DG','LG','LG'],
+    ['LG','LG','DGY','DGY','DGY','DGY','DGY','DGY','DGY','LG','DG'],
+    ['LG','LG','LG','LG','LG','DG','DG','DG','DGY','LG','DG'],
+    ['LG','LG','LGY','LGY','LG','LG','LG','LG','DGY','RED','LG'],
+    ['DG','DG','LGY','DG','LG','DG','DG','LG','LG','LG','LG'],
+    ['DG','DG','LG','LG','LG','DG','DG','LG','LG','LG','LG']
+];
+const BLOCKED_TILES = { RED: true, LGY: true }; // Building, Mountain
 
 const HERO_TEMPLATES = {
     'Peasant':   { hp: 30,  melee: 10, range: 0 },
@@ -140,11 +159,52 @@ function enterHubPhase() {
 
 function resetArenaState() {
     currentRound = 1;
-    p1Pos = { x: 1, y: 2 };
-    p2Pos = { x: 9, y: 7 };
+    // Reset to building-adjacent starts (not ON the buildings themselves)
+    p1Pos = { x: 1, y: 1 };
+    p2Pos = { x: 9, y: 8 };
     p1Party = [];
     p2Party = [];
     currentRoundMoves = {};
+}
+
+// Look up the terrain code for a grid cell (row = y, column = x).
+function getTileAt(x, y) {
+    if (y < 0 || y >= ARENA_TILE_MAP.length) return null;
+    if (x < 0 || x >= ARENA_TILE_MAP[y].length) return null;
+    return ARENA_TILE_MAP[y][x];
+}
+
+function isBlockedTile(x, y) {
+    const tile = getTileAt(x, y);
+    return !tile || BLOCKED_TILES[tile] === true;
+}
+
+// Movement budget for this turn, based on the tile the party STARTS on.
+// Road (DGY): +1 square. Forest (DG): -1 square, but never below 1.
+function getMovementCapacity(order, startPos) {
+    let capacity = ORDER_CAPACITIES[order] || 2;
+    const tile = getTileAt(startPos.x, startPos.y);
+    if (tile === 'DGY') capacity += 1;
+    else if (tile === 'DG') capacity = Math.max(1, capacity - 1);
+    return capacity;
+}
+
+// Ranged defence: change incoming damage based on the DEFENDER's tile after movement.
+// Road = exposed (+10%), Grass = light cover (-10%), Forest = heavy cover (-25%).
+function applyRangedDefenceModifier(rawDamage, defenderPos) {
+    const tile = getTileAt(defenderPos.x, defenderPos.y);
+    if (tile === 'DGY') return Math.floor(rawDamage * 1.1);
+    if (tile === 'LG') return Math.floor(rawDamage * 0.9);
+    if (tile === 'DG') return Math.floor(rawDamage * 0.75);
+    return rawDamage;
+}
+
+function rangedDefenceLabel(defenderPos) {
+    const tile = getTileAt(defenderPos.x, defenderPos.y);
+    if (tile === 'DGY') return 'Road (+10% ranged taken)';
+    if (tile === 'LG') return 'Grass (-10% ranged taken)';
+    if (tile === 'DG') return 'Forest (-25% ranged taken)';
+    return null;
 }
 
 function bothPlayersJoinedSameRoom() {
@@ -207,10 +267,12 @@ function normalizeSquad(party) {
 }
 
 // Clients may DRAW a path, but the server RECHECKS it so cheats / bugs cannot move too far.
-// Rules: stay on the grid, move one cell at a time (no diagonals), and respect order capacity.
+// Rules: stay on the grid, one cell at a time (no diagonals), respect terrain capacity,
+// and never step onto Buildings (RED) or Mountains (LGY).
 function validateMovementPath(startPos, path, order) {
     if (!Array.isArray(path)) return [];
-    const maxCapacity = ORDER_CAPACITIES[order] || 2;
+    // Capacity uses the STARTING tile (Road/Forest modifiers), not tiles along the path.
+    const maxCapacity = getMovementCapacity(order, startPos);
     const valid = [];
     let ax = startPos.x, ay = startPos.y;
     for (let i = 0; i < path.length && valid.length < maxCapacity; i++) {
@@ -219,6 +281,8 @@ function validateMovementPath(startPos, path, order) {
         if (cell.x < 0 || cell.x > GRID_MAX_X || cell.y < 0 || cell.y > GRID_MAX_Y) break;
         // Manhattan distance of 1 = orthogonally adjacent (up/down/left/right only)
         if (Math.abs(cell.x - ax) + Math.abs(cell.y - ay) !== 1) break;
+        // Impassable terrain: stop the path here (do not accept this cell)
+        if (isBlockedTile(cell.x, cell.y)) break;
         valid.push({ x: cell.x, y: cell.y });
         ax = cell.x;
         ay = cell.y;
@@ -418,6 +482,17 @@ function resolveRoundSimulation() {
         return sum;
     };
 
+    // Helper: apply ranged damage after terrain defence on the target's tile.
+    // Melee (distance 1) does NOT use these cover modifiers — only ranged skirmishes do.
+    let dealRangedDamage = (targetParty, targetPos, rawPower, label) => {
+        const modified = applyRangedDefenceModifier(rawPower, targetPos);
+        const coverNote = rangedDefenceLabel(targetPos);
+        if (coverNote && rawPower > 0) {
+            roundLog += ` -> Terrain: defender on ${coverNote} (${rawPower} -> ${modified} dmg).<br>`;
+        }
+        applySpilloverDamage(targetParty, modified, (str) => roundLog += str, label);
+    };
+
     // 3. Combat Matrix Fork (Rule 3.1)
     if (gridDistance === 2) {
         // --- RANGED COMBAT PHASE (Rule 3.4) ---
@@ -426,27 +501,27 @@ function resolveRoundSimulation() {
         if (simultaneous) {
             let p1Power = getRangedPower(p1Party, p1Move.order);
             let p2Power = getRangedPower(p2Party, p2Move.order);
-            applySpilloverDamage(p2Party, p1Power, (str) => roundLog += str, "P1 Barrage");
-            applySpilloverDamage(p1Party, p2Power, (str) => roundLog += str, "P2 Barrage");
+            dealRangedDamage(p2Party, p2Pos, p1Power, "P1 Barrage");
+            dealRangedDamage(p1Party, p1Pos, p2Power, "P2 Barrage");
         } else if (p1HasInitiative) {
             let p1Power = getRangedPower(p1Party, p1Move.order);
-            applySpilloverDamage(p2Party, p1Power, (str) => roundLog += str, "P1 Initiative Shot");
+            dealRangedDamage(p2Party, p2Pos, p1Power, "P1 Initiative Shot");
             
             // Recalculate P2 power based ONLY on surviving units
             let p2SurvivingPower = getRangedPower(p2Party, p2Move.order);
             if (p2SurvivingPower > 0) {
-                applySpilloverDamage(p1Party, p2SurvivingPower, (str) => roundLog += str, "P2 Retaliation Shot");
+                dealRangedDamage(p1Party, p1Pos, p2SurvivingPower, "P2 Retaliation Shot");
             } else {
                 roundLog += " -> P2 backline completely broken! No survivors left to return fire.<br>";
             }
         } else {
             let p2Power = getRangedPower(p2Party, p2Move.order);
-            applySpilloverDamage(p1Party, p2Power, (str) => roundLog += str, "P2 Initiative Shot");
+            dealRangedDamage(p1Party, p1Pos, p2Power, "P2 Initiative Shot");
             
             // Recalculate P1 power based ONLY on surviving units
             let p1SurvivingPower = getRangedPower(p1Party, p1Move.order);
             if (p1SurvivingPower > 0) {
-                applySpilloverDamage(p2Party, p1SurvivingPower, (str) => roundLog += str, "P1 Retaliation Shot");
+                dealRangedDamage(p2Party, p2Pos, p1SurvivingPower, "P1 Retaliation Shot");
             } else {
                 roundLog += " -> P1 backline completely broken! No survivors left to return fire.<br>";
             }
