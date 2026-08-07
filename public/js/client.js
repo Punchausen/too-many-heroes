@@ -129,28 +129,55 @@ function switchScreen(newState) {
     if (newState === 'TOWN_HQ') {
         requestAnimationFrame(fitTownStage);
     }
+    if (newState === 'TAVERN') {
+        requestAnimationFrame(fitTavernStage);
+    }
+    if (newState === 'PARTY_DETAIL') {
+        requestAnimationFrame(fitPartyDetailStage);
+    }
 }
 
-// Letterbox the town art (same idea as splash contain) so tooltip % positions stay on buildings.
-const TOWN_ART_W = 1024;
-const TOWN_ART_H = 534; // town.jpeg height after TOWN DESTINATIONS strip removed
-function fitTownStage() {
-    const wrap = document.getElementById('town-stage-wrap');
-    const stage = document.getElementById('town-stage');
-    if (!wrap || !stage || currentRoomState !== 'TOWN_HQ') return;
+// Letterbox a stage box inside its wrap (same contain behaviour as splash / town).
+function fitLetterboxStage(wrapId, stageId, artW, artH, expectedRoom) {
+    const wrap = document.getElementById(wrapId);
+    const stage = document.getElementById(stageId);
+    if (!wrap || !stage || currentRoomState !== expectedRoom) return;
 
     const availW = wrap.clientWidth;
     const availH = wrap.clientHeight;
     if (availW <= 0 || availH <= 0) return;
 
     let w = availW;
-    let h = w * (TOWN_ART_H / TOWN_ART_W);
+    let h = w * (artH / artW);
     if (h > availH) {
         h = availH;
-        w = h * (TOWN_ART_W / TOWN_ART_H);
+        w = h * (artW / artH);
     }
     stage.style.width = `${Math.round(w)}px`;
     stage.style.height = `${Math.round(h)}px`;
+}
+
+const TOWN_ART_W = 1024;
+const TOWN_ART_H = 534; // town.jpeg height after TOWN DESTINATIONS strip removed
+function fitTownStage() {
+    fitLetterboxStage('town-stage-wrap', 'town-stage', TOWN_ART_W, TOWN_ART_H, 'TOWN_HQ');
+}
+
+const TAVERN_ART_W = 1024;
+const TAVERN_ART_H = 557;
+function fitTavernStage() {
+    fitLetterboxStage('tavern-stage-wrap', 'tavern-stage', TAVERN_ART_W, TAVERN_ART_H, 'TAVERN');
+}
+
+function fitPartyDetailStage() {
+    // Same letterbox size as the tavern art when opened from The Rusty Scabbard.
+    fitLetterboxStage(
+        'party-detail-stage-wrap',
+        'party-detail-stage',
+        TAVERN_ART_W,
+        TAVERN_ART_H,
+        'PARTY_DETAIL'
+    );
 }
 
 // If the map frame is larger than the map, scale the canvas up until width OR height
@@ -355,10 +382,28 @@ function openPartyDetail(partyNumber, returnTo) {
     partyDetailReturnTo = returnTo;
     viewingPartyNumber = partyNumber;
 
+    const fromTavern = returnTo === 'TAVERN';
+    const detailScreen = document.getElementById('screen-party-detail');
+    if (detailScreen) {
+        detailScreen.classList.toggle('from-tavern', fromTavern);
+    }
+
+    // Top bar stays as the location (same as Tavern home when opened from there).
+    const locationEl = document.getElementById('party-detail-location');
+    if (locationEl) {
+        locationEl.textContent = fromTavern ? 'The Rusty Scabbard' : 'Party Details';
+    }
+    const goldWrap = document.getElementById('party-detail-gold-wrap');
+    const goldEl = document.getElementById('party-detail-gold');
+    if (goldWrap) goldWrap.style.display = fromTavern ? '' : 'none';
+    if (goldEl) goldEl.textContent = playerGold;
+
+    // Inside the frame: large party name, then smaller "Party N".
     const heading = document.getElementById('party-detail-heading');
     const sub = document.getElementById('party-detail-sub');
-    if (heading) heading.textContent = `Party ${party.number}`;
-    if (sub) sub.textContent = party.name;
+    if (heading) heading.textContent = party.name;
+    if (sub) sub.textContent = `Party ${party.number}`;
+
     renderHeroCards(document.getElementById('party-detail-members'), party.members);
     switchScreen('PARTY_DETAIL');
 }
@@ -483,7 +528,7 @@ function applyStateSync(data) {
 }
 
 function renderSyncedUI() {
-    const goldIds = ['hq-gold', 'tavern-gold', 'castle-gold', 'mission-gold'];
+    const goldIds = ['hq-gold', 'tavern-gold', 'castle-gold', 'mission-gold', 'party-detail-gold'];
     goldIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = playerGold;
@@ -1263,6 +1308,8 @@ function refitResponsiveLayouts() {
     requestAnimationFrame(() => {
         fitMapCanvasInFrame();
         fitTownStage();
+        fitTavernStage();
+        fitPartyDetailStage();
     });
 }
 window.addEventListener('orientationchange', refitResponsiveLayouts);

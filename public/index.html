@@ -202,6 +202,147 @@
             width: 12.89%; /* 220 * 0.6 / 1024 */
         }
 
+        /* Tavern: letterboxed art + wood bar; party columns narrower + translucent */
+        #screen-tavern {
+            background: #000;
+            overflow: hidden;
+        }
+        #tavern-stage-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+        #tavern-stage {
+            position: relative;
+            flex-shrink: 0;
+            background: #000 center center / 100% 100% no-repeat;
+            background-image: url('/assets/backgrounds/tavern.jpeg');
+        }
+        #tavern-ui {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            padding: 16px 0 12px;
+            min-height: 0;
+        }
+        /* Columns ~39% wide (30% * 1.3). Side margins = centre gap = 7.333%. */
+        .tavern-two-col {
+            display: grid;
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            box-sizing: border-box;
+            grid-template-columns: 7.333% 39% 7.333% 39% 7.333%;
+            align-items: stretch;
+        }
+        .tavern-col-panel {
+            min-width: 0;
+            min-height: 0;
+            overflow: auto;
+            box-sizing: border-box;
+            padding: 16px;
+            background: rgba(20, 16, 12, 0.55);
+            border: 1px solid rgba(255, 220, 160, 0.18);
+            color: #fff;
+        }
+        .tavern-two-col > .tavern-col-panel:nth-child(1) { grid-column: 2; }
+        .tavern-two-col > .tavern-col-panel:nth-child(2) { grid-column: 4; }
+        .tavern-col-panel h3 {
+            color: #00ffff;
+            margin-top: 0;
+            font-size: 16px;
+        }
+        #screen-tavern .party-list-row,
+        #screen-tavern .hero-card {
+            background: rgba(34, 34, 34, 0.55);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        #tavern-ui .nav-row {
+            flex: 0 0 auto;
+        }
+        /* All tavern actions are selectable — same orange as primary */
+        #screen-tavern .btn-primary,
+        #screen-tavern .btn-secondary {
+            background: #ff9800;
+            color: #000;
+        }
+        #screen-tavern .btn-primary:disabled,
+        #screen-tavern .btn-secondary:disabled {
+            background: #444;
+            color: #888;
+        }
+
+        /* Party detail — tavern look when opened from The Rusty Scabbard */
+        #screen-party-detail {
+            background: #000;
+            overflow: hidden;
+        }
+        #party-detail-stage-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+        #party-detail-stage {
+            position: relative;
+            flex-shrink: 0;
+            background: #111 center center / 100% 100% no-repeat;
+        }
+        #screen-party-detail.from-tavern #party-detail-stage {
+            background-image: url('/assets/backgrounds/tavern.jpeg');
+        }
+        #party-detail-ui {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            padding: 24px 7.333%;
+            min-height: 0;
+        }
+        #party-detail-frame {
+            width: min(520px, 100%);
+            max-height: 100%;
+            overflow: auto;
+            box-sizing: border-box;
+            padding: 20px;
+            background: rgba(20, 16, 12, 0.55);
+            border: 1px solid rgba(255, 220, 160, 0.18);
+            color: #fff;
+        }
+        #party-detail-heading {
+            text-align: center;
+            color: #ff9800;
+            font-size: clamp(22px, 3.2vw, 32px);
+            font-weight: bold;
+            margin: 0 0 8px 0;
+        }
+        #party-detail-sub {
+            text-align: center;
+            color: #aaa;
+            margin: 0 0 16px 0;
+            font-size: 14px;
+        }
+        #screen-party-detail .hero-card {
+            background: rgba(34, 34, 34, 0.55);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        #screen-party-detail #btn-party-detail-back {
+            background: #ff9800;
+            color: #000;
+        }
+
         /* Arena: fixed chrome + scrollable map frame */
         #screen-tactical-arena {
             background: #0a0a0a;
@@ -415,37 +556,56 @@
 
     <!-- [3] TAVERN -->
     <div id="screen-tavern" class="game-screen">
-        <div class="screen-panel">
-            <h2 class="screen-title">THE TAVERN RECRUITMENT MARKET</h2>
-            <div class="gold-display">Gold: <span id="tavern-gold">100</span>g</div>
-            <div class="two-col">
-                <div class="col-panel">
-                    <h3>Your Hired Parties</h3>
-                    <div id="tavern-roster"></div>
-                </div>
-                <div class="col-panel">
-                    <h3 id="tavern-offer-title" style="color: #ff9800;">Available Contract</h3>
-                    <div id="tavern-offer"></div>
+        <div class="town-top-bar">
+            <span class="town-top-title">The Rusty Scabbard</span>
+            <span class="town-top-gold">Gold: <span id="tavern-gold">100</span>g</span>
+        </div>
+        <div id="tavern-stage-wrap">
+            <div id="tavern-stage">
+                <div id="tavern-ui">
+                    <div class="tavern-two-col">
+                        <div class="tavern-col-panel">
+                            <h3>Your Hired Parties</h3>
+                            <div id="tavern-roster"></div>
+                        </div>
+                        <div class="tavern-col-panel">
+                            <h3 id="tavern-offer-title" style="color: #ff9800;">Available Contract</h3>
+                            <div id="tavern-offer"></div>
+                            <div class="nav-row">
+                                <button id="btn-hire-party" class="btn-primary">HIRE PARTY</button>
+                                <button id="btn-reroll-offer" class="btn-primary">REROLL (5g)</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="nav-row">
-                        <button id="btn-hire-party" class="btn-primary">HIRE PARTY</button>
-                        <button id="btn-reroll-offer" class="btn-secondary">REROLL (5g)</button>
+                        <button id="btn-tavern-return-hq" class="btn-primary">Return to Town HQ</button>
                     </div>
                 </div>
-            </div>
-            <div class="nav-row">
-                <button id="btn-tavern-return-hq" class="btn-secondary">Return to Town HQ</button>
             </div>
         </div>
     </div>
 
-    <!-- [3b] PARTY DETAIL (shared by Tavern + Castle) -->
+    <!-- [3b] PARTY DETAIL (shared by Tavern + Castle / mission briefing) -->
     <div id="screen-party-detail" class="game-screen">
-        <div class="screen-panel">
-            <h2 id="party-detail-heading" class="screen-title">Party</h2>
-            <p id="party-detail-sub" style="text-align:center; color:#aaa; margin-top:-12px;"></p>
-            <div id="party-detail-members" style="max-width:520px; margin:0 auto; width:100%;"></div>
-            <div class="nav-row">
-                <button id="btn-party-detail-back" class="btn-secondary">Back</button>
+        <div class="town-top-bar">
+            <!-- Same location label as the screen you came from (Tavern keeps "The Rusty Scabbard") -->
+            <span id="party-detail-location" class="town-top-title">Party</span>
+            <span id="party-detail-gold-wrap" class="town-top-gold" style="display:none;">
+                Gold: <span id="party-detail-gold">100</span>g
+            </span>
+        </div>
+        <div id="party-detail-stage-wrap">
+            <div id="party-detail-stage">
+                <div id="party-detail-ui">
+                    <div id="party-detail-frame">
+                        <h2 id="party-detail-heading">Party</h2>
+                        <p id="party-detail-sub">Party</p>
+                        <div id="party-detail-members"></div>
+                        <div class="nav-row">
+                            <button id="btn-party-detail-back" class="btn-primary">Back</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
