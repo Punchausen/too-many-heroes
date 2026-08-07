@@ -65,10 +65,8 @@ let deploymentStatus = {
 };
 let arenaPlayerNames = { p1: '', p2: '' };
 
-// Which party token you clicked on the canvas (matches server uid, e.g. "p1-2").
+// Which party token you selected (matches server uid, e.g. "p1-2").
 let selectedPartyUid = null;
-// Clickable party-list boxes drawn on the left of the arena canvas
-let partyListHitBoxes = [];
 
 // Combat planning: one entry per party number you control this round.
 // { order: 'Advance', path: [{x,y}, ...] }
@@ -84,10 +82,8 @@ let viewingPartyNumber = null;
 let lobbyStatusText = { p1: 'DISCONNECTED', p2: 'DISCONNECTED', readyP1: false, readyP2: false };
 
 // --- Arena grid layout (must match server.js ARENA_TILE_MAP) ---
-// Wider canvas (1400): left party list | map | right selected-party details
-const ARENA_GRID = { offsetX: 420, offsetY: 90, cellSize: 50, width: 11, height: 10 };
-const PARTY_LIST_PANEL = { x: 16, y: 78, width: 380, rowH: 48, gap: 8 };
-const DETAIL_PANEL = { x: 1000, y: 78, width: 380 };
+// Canvas is MAP ONLY; party list / details are HTML beside a scrollable map frame.
+const ARENA_GRID = { offsetX: 0, offsetY: 0, cellSize: 50, width: 11, height: 10 };
 // Fog of War: each living friendly party reveals tiles within this Manhattan distance
 // (plain travel steps — Road/Forest move bonuses do NOT extend vision).
 const FOG_VISION_RANGE = 2;
@@ -120,10 +116,105 @@ const MAX_FIELDED_PARTIES = 4;
 // ==================== 2. SCREEN SWITCHER & UI RENDER ====================
 
 function switchScreen(newState) {
+    // Avoid toggling .active on every STATE_SYNC — that flashes the whole arena on mobile.
+    if (currentRoomState === newState) return;
+
     currentRoomState = newState;
     document.querySelectorAll('.game-screen').forEach(el => el.classList.remove('active'));
     const screenId = SCREEN_MAP[newState];
     if (screenId) document.getElementById(screenId).classList.add('active');
+    if (newState === 'TACTICAL_ARENA') {
+        requestAnimationFrame(fitMapCanvasInFrame);
+    }
+    if (newState === 'TOWN_HQ') {
+        requestAnimationFrame(fitTownStage);
+    }
+}
+
+// Letterbox the town art (same idea as splash contain) so tooltip % positions stay on buildings.
+const TOWN_ART_W = 1024;
+const TOWN_ART_H = 534; // town.jpeg height after TOWN DESTINATIONS strip removed
+function fitTownStage() {
+    const wrap = document.getElementById('town-stage-wrap');
+    const stage = document.getElementById('town-stage');
+    if (!wrap || !stage || currentRoomState !== 'TOWN_HQ') return;
+
+    const availW = wrap.clientWidth;
+    const availH = wrap.clientHeight;
+    if (availW <= 0 || availH <= 0) return;
+
+    let w = availW;
+    let h = w * (TOWN_ART_H / TOWN_ART_W);
+    if (h > availH) {
+        h = availH;
+        w = h * (TOWN_ART_W / TOWN_ART_H);
+    }
+    stage.style.width = `${Math.round(w)}px`;
+    stage.style.height = `${Math.round(h)}px`;
+}
+
+// If the map frame is larger than the map, scale the canvas up until width OR height
+// fits snugly, and keep it centered. If the frame is smaller, stay at 1:1 and scroll.
+function fitMapCanvasInFrame() {
+    const frame = document.getElementById('arena-map-scroll');
+    if (!frame || !canvas || currentRoomState !== 'TACTICAL_ARENA') return;
+
+    const mapW = ARENA_GRID.width * ARENA_GRID.cellSize;
+    const mapH = ARENA_GRID.height * ARENA_GRID.cellSize;
+    const frameW = frame.clientWidth;
+    const frameH = frame.clientHeight;
+    if (frameW <= 0 || frameH <= 0) return;
+
+    let scale = Math.min(frameW / mapW, frameH / mapH);
+    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+    // Never shrink below native size — user can scroll instead of squeezing tiles.
+    if (scale < 1) scale = 1;
+
+    const displayW = Math.round(mapW * scale);
+    const displayH = Math.round(mapH * scale);
+    canvas.style.width = `${displayW}px`;
+    canvas.style.height = `${displayH}px`;
+
+    // Flex-center when the map fits (or fills) the frame; block layout when scrolling.
+    const fits = displayW <= frameW + 1 && displayH <= frameH + 1;
+    frame.style.display = 'flex';
+    frame.style.alignItems = 'center';
+    frame.style.justifyContent = 'center';
+    // When content is larger than the frame, flex-centering fights scroll position —
+    // pin to top-left so scrollbars behave normally.
+    if (!fits) {
+        frame.style.alignItems = 'flex-start';
+        frame.style.justifyContent = 'flex-start';
+    }
+}
+
+// Phones/tablets: try OS landscape lock (often needs fullscreen); else show rotate overlay.
+function isMobileLikeDevice() {
+    return /Mobi|Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        || (navigator.maxTouchPoints > 1 && window.matchMedia('(pointer: coarse)').matches);
+}
+
+function updateRotateOverlay() {
+    const overlay = document.getElementById('rotate-lock-overlay');
+    if (!overlay) return;
+    const portrait = window.matchMedia('(orientation: portrait)').matches;
+    overlay.classList.toggle('active', isMobileLikeDevice() && portrait);
+}
+
+async function tryLockLandscape() {
+    if (!isMobileLikeDevice()) return;
+    try {
+        const root = document.documentElement;
+        if (!document.fullscreenElement && root.requestFullscreen) {
+            await root.requestFullscreen();
+        }
+    } catch (err) { /* fullscreen may be blocked */ }
+    try {
+        if (screen.orientation && screen.orientation.lock) {
+            await screen.orientation.lock('landscape');
+        }
+    } catch (err) { /* iOS / unsigned sites often reject lock */ }
+    updateRotateOverlay();
 }
 
 function getTeamColor(faction) {
@@ -398,9 +489,6 @@ function renderSyncedUI() {
         if (el) el.textContent = playerGold;
     });
 
-    const nameEl = document.getElementById('hq-player-name');
-    if (nameEl) nameEl.textContent = playerName || 'Hero';
-
     renderTavernRoster();
 
     const offerTitle = document.getElementById('tavern-offer-title');
@@ -428,13 +516,81 @@ function renderSyncedUI() {
     const roundLabel = document.getElementById('arena-round-label');
     if (roundLabel) {
         roundLabel.textContent = arenaPhase === 'DEPLOYMENT'
-            ? 'DEPLOYMENT: select a party, click a red-bordered square, then READY'
+            ? 'DEPLOYMENT: select a party, tap a red-bordered square, then READY'
             : `DAY: ${currentRound} / ${maxRounds}`;
     }
 
+    renderArenaChrome();
     updateOrderButtons();
     updateOrderButtonsEnabled();
     updateLockTurnButton();
+}
+
+// HTML side panels + header (map itself stays on the canvas).
+function renderArenaChrome() {
+    const playerEl = document.getElementById('arena-header-player');
+    if (playerEl) {
+        playerEl.textContent = playerName || 'Hero';
+        playerEl.style.color = getTeamColor(myFaction);
+    }
+    const phaseEl = document.getElementById('arena-header-phase');
+    if (phaseEl) {
+        phaseEl.textContent = arenaPhase === 'DEPLOYMENT'
+            ? 'DEPLOYMENT PHASE'
+            : `DAY: ${currentRound} / ${maxRounds}`;
+    }
+
+    const listHost = document.getElementById('arena-party-list-items');
+    if (listHost) {
+        listHost.innerHTML = '';
+        const mine = getMyArenaParties().slice().sort((a, b) => a.number - b.number);
+        const team = getTeamColor(myFaction);
+        mine.forEach(ap => {
+            const alive = partyIsAlive(ap);
+            const living = ap.members.filter(m => m.hp > 0).length;
+            const planOrder = (localPlans[ap.number] && localPlans[ap.number].order) || ap.order || 'Advance';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'arena-party-btn' + (selectedPartyUid === ap.uid ? ' selected' : '');
+            btn.style.borderColor = selectedPartyUid === ap.uid ? team : '#444';
+            btn.innerHTML = `<div style="color:${alive ? team : '#666'};font-weight:bold;">${ap.number}. ${ap.name}</div>`
+                + `<div class="sub">${living}/${ap.members.length} standing  |  ${planOrder}</div>`;
+            btn.addEventListener('click', () => {
+                selectedPartyUid = ap.uid;
+                updateOrderButtons();
+                updateOrderButtonsEnabled();
+                renderArenaChrome();
+            });
+            listHost.appendChild(btn);
+        });
+        if (!mine.length) {
+            listHost.innerHTML = '<p style="color:#666;">No parties fielded.</p>';
+        }
+    }
+
+    const detailHost = document.getElementById('arena-party-detail-body');
+    if (!detailHost) return;
+    const selected = getSelectedArenaParty();
+    if (!selected || selected.faction !== myFaction) {
+        detailHost.innerHTML = '<p style="color:#666;">Select a party from the list to view details.</p>';
+        return;
+    }
+    const plan = localPlans[selected.number];
+    const shownOrder = (plan && plan.order) || selected.order || 'Advance';
+    let html = `<div style="color:${getTeamColor(myFaction)};font-weight:bold;font-size:14px;margin-bottom:6px;">`
+        + `${selected.number}. ${selected.name}</div>`
+        + `<div style="color:#888;margin-bottom:10px;">Order: ${shownOrder}</div>`;
+    selected.members.forEach(h => {
+        const melee = h.melee != null ? h.melee : (LOCAL_HERO_TEMPLATES[h.role] || {}).melee;
+        const range = h.range != null ? h.range : (LOCAL_HERO_TEMPLATES[h.role] || {}).range;
+        const dead = h.hp <= 0;
+        html += `<div class="arena-member-card">`
+            + `<div class="role${dead ? ' dead' : ''}">${h.role.toUpperCase()}</div>`
+            + `<div class="${dead ? 'dead' : ''}">${dead ? 'UNCONSCIOUS' : `❤ ${h.hp}/${h.baseHp} HP`}</div>`
+            + `<div style="color:#aaa;">⚔ ${melee} Melee   🏹 ${range} Range</div>`
+            + `</div>`;
+    });
+    detailHost.innerHTML = html;
 }
 
 function getSelectedArenaParty() {
@@ -666,130 +822,10 @@ function onLockOrReadyClick() {
     if (arenaPhase === 'COMBAT') submitTurn();
 }
 
-// ==================== 6. ARENA CANVAS ====================
-
-// Left column: clickable boxes for each of YOUR parties (selection UI).
-function drawPartyListPanel(selected) {
-    partyListHitBoxes = [];
-    const mine = getMyArenaParties().slice().sort((a, b) => a.number - b.number);
-    const team = getTeamColor(myFaction);
-
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillStyle = '#aaa';
-    ctx.fillText('YOUR PARTIES (click to select)', PARTY_LIST_PANEL.x, PARTY_LIST_PANEL.y - 8);
-
-    mine.forEach((ap, idx) => {
-        const x = PARTY_LIST_PANEL.x;
-        const y = PARTY_LIST_PANEL.y + idx * (PARTY_LIST_PANEL.rowH + PARTY_LIST_PANEL.gap);
-        const w = PARTY_LIST_PANEL.width;
-        const h = PARTY_LIST_PANEL.rowH;
-        const isSelected = selected && selected.uid === ap.uid;
-        const alive = partyIsAlive(ap);
-
-        ctx.fillStyle = isSelected ? 'rgba(255, 152, 0, 0.25)' : '#1a1a1a';
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = isSelected ? team : '#444';
-        ctx.lineWidth = isSelected ? 3 : 1;
-        ctx.strokeRect(x, y, w, h);
-
-        ctx.fillStyle = alive ? team : '#666';
-        ctx.font = 'bold 14px monospace';
-        ctx.fillText(`${ap.number}. ${ap.name}`, x + 10, y + 20);
-        ctx.fillStyle = '#888';
-        ctx.font = '12px monospace';
-        const living = ap.members.filter(m => m.hp > 0).length;
-        const planOrder = (localPlans[ap.number] && localPlans[ap.number].order) || ap.order || 'Advance';
-        ctx.fillText(`${living}/${ap.members.length} standing  |  ${planOrder}`, x + 10, y + 38);
-
-        partyListHitBoxes.push({ uid: ap.uid, x, y, w, h });
-    });
-}
-
-// Right column: full name + member stats for the selected party.
-function drawSelectedPartyDetail(selected) {
-    const x = DETAIL_PANEL.x;
-    const y = DETAIL_PANEL.y;
-    const w = DETAIL_PANEL.width;
-
-    ctx.fillStyle = '#141414';
-    ctx.fillRect(x, y, w, 500);
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, y, w, 500);
-
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillStyle = '#aaa';
-    ctx.fillText('SELECTED PARTY', x + 12, y + 22);
-
-    if (!selected || selected.faction !== myFaction) {
-        ctx.fillStyle = '#666';
-        ctx.font = '13px monospace';
-        ctx.fillText('Select a party from the list', x + 12, y + 56);
-        ctx.fillText('on the left to view details', x + 12, y + 76);
-        return;
-    }
-
-    ctx.fillStyle = getTeamColor(myFaction);
-    ctx.font = 'bold 16px monospace';
-    const title = `${selected.number}. ${selected.name}`;
-    ctx.fillText(title.length > 34 ? title.slice(0, 33) + '…' : title, x + 12, y + 52);
-
-    ctx.fillStyle = '#888';
-    ctx.font = '12px monospace';
-    const plan = localPlans[selected.number];
-    const shownOrder = (plan && plan.order) || selected.order || 'Advance';
-    ctx.fillText(`Order: ${shownOrder}`, x + 12, y + 74);
-
-    selected.members.forEach((h, idx) => {
-        const rowY = y + 110 + (idx * 72);
-        ctx.fillStyle = '#222';
-        ctx.fillRect(x + 10, rowY - 22, w - 20, 64);
-        ctx.strokeStyle = '#444';
-        ctx.strokeRect(x + 10, rowY - 22, w - 20, 64);
-
-        ctx.fillStyle = h.hp > 0 ? '#ff9800' : '#ff5555';
-        ctx.font = 'bold 14px monospace';
-        ctx.fillText(h.role.toUpperCase(), x + 20, rowY);
-
-        ctx.fillStyle = h.hp > 0 ? '#fff' : '#ff5555';
-        ctx.font = '13px monospace';
-        const hpLine = h.hp > 0 ? `❤ ${h.hp}/${h.baseHp} HP` : 'UNCONSCIOUS';
-        ctx.fillText(hpLine, x + 20, rowY + 22);
-
-        const melee = h.melee != null ? h.melee : (LOCAL_HERO_TEMPLATES[h.role] || {}).melee;
-        const range = h.range != null ? h.range : (LOCAL_HERO_TEMPLATES[h.role] || {}).range;
-        ctx.fillStyle = '#aaa';
-        ctx.fillText(`⚔ ${melee} Melee   🏹 ${range} Range`, x + 20, rowY + 40);
-    });
-}
+// ==================== 6. ARENA CANVAS (map only) ====================
 
 function drawArenaScreen() {
-    // --- Title bar ---
-    ctx.fillStyle = '#1e1e1e';
-    ctx.fillRect(0, 0, canvas.width, 60);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 20px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('TOO MANY HEROES - COMBAT ARENA - ', 20, 38);
-    const titleWidth = ctx.measureText('TOO MANY HEROES - COMBAT ARENA - ').width;
-    ctx.fillStyle = getTeamColor(myFaction);
-    ctx.fillText(playerName || 'Hero', 20 + titleWidth, 38);
-
-    ctx.fillStyle = '#ff9800';
-    ctx.textAlign = 'right';
-    ctx.fillText(
-        arenaPhase === 'DEPLOYMENT' ? 'DEPLOYMENT PHASE' : `DAY: ${currentRound} / ${maxRounds}`,
-        canvas.width - 20,
-        38
-    );
-
     const selected = getSelectedArenaParty();
-
-    // Left: party list | Centre: map | Right: selected party details
-    drawPartyListPanel(selected);
-    drawSelectedPartyDetail(selected);
 
     // Path highlight for the selected party (combat only).
     const selectedPlan = getSelectedPlan();
@@ -942,6 +978,8 @@ function setJoinWaitingState(waiting) {
 
 function wireNavigationButtons() {
     document.getElementById('btn-join-game').addEventListener('click', () => {
+        // User gesture: best chance for fullscreen + orientation.lock on mobile.
+        tryLockLandscape();
         const joinBtn = document.getElementById('btn-join-game');
         if (joinBtn.disabled) return;
 
@@ -1000,40 +1038,37 @@ function wireNavigationButtons() {
             localPlans[ap.number].order = order;
             localPlans[ap.number].path = [];
             updateOrderButtons();
+            renderArenaChrome();
         });
     });
 
     document.getElementById('btn-lock-turn').addEventListener('click', onLockOrReadyClick);
 }
 
-// Convert a mouse click on the canvas into grid coordinates.
-function canvasCellFromEvent(event) {
+// Map a pointer event to canvas bitmap coordinates (map is 550x500).
+function canvasPointFromEvent(event) {
     const rect = canvas.getBoundingClientRect();
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-    const cellX = Math.floor((mouseX - ARENA_GRID.offsetX) / ARENA_GRID.cellSize);
-    const cellY = Math.floor((mouseY - ARENA_GRID.offsetY) / ARENA_GRID.cellSize);
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        x: (event.clientX - rect.left) * scaleX,
+        y: (event.clientY - rect.top) * scaleY
+    };
+}
+
+// Convert a pointer event on the canvas into grid coordinates.
+function canvasCellFromEvent(event) {
+    const pt = canvasPointFromEvent(event);
+    if (!pt) return null;
+    const cellX = Math.floor((pt.x - ARENA_GRID.offsetX) / ARENA_GRID.cellSize);
+    const cellY = Math.floor((pt.y - ARENA_GRID.offsetY) / ARENA_GRID.cellSize);
     if (cellX < 0 || cellX >= ARENA_GRID.width || cellY < 0 || cellY >= ARENA_GRID.height) return null;
     return { x: cellX, y: cellY };
 }
 
-canvas.addEventListener('click', (event) => {
+function handleArenaPointer(event) {
     if (currentRoomState !== 'TACTICAL_ARENA' || myFaction === 'spectator' || !matchActive) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-
-    // Party selection is via the LEFT LIST boxes only (not map tokens).
-    const hit = partyListHitBoxes.find(b =>
-        mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h
-    );
-    if (hit) {
-        selectedPartyUid = hit.uid;
-        updateOrderButtons();
-        updateOrderButtonsEnabled();
-        return;
-    }
 
     const cell = canvasCellFromEvent(event);
     if (!cell) return;
@@ -1053,6 +1088,7 @@ canvas.addEventListener('click', (event) => {
         selected.y = cellY;
         socket.emit('DEPLOY_PLACE', { partyNumber: selected.number, x: cellX, y: cellY });
         updateLockTurnButton();
+        renderArenaChrome();
         return;
     }
 
@@ -1088,7 +1124,25 @@ canvas.addEventListener('click', (event) => {
     if (Math.abs(cellX - anchorX) + Math.abs(cellY - anchorY) === 1) {
         plan.path = path.concat([{ x: cellX, y: cellY }]);
     }
+}
+
+// Ignore drags so scrolling the map frame does not also place a party.
+let arenaPointerDown = null;
+canvas.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    arenaPointerDown = { x: event.clientX, y: event.clientY };
 });
+canvas.addEventListener('pointerup', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (!arenaPointerDown) return;
+    const dx = Math.abs(event.clientX - arenaPointerDown.x);
+    const dy = Math.abs(event.clientY - arenaPointerDown.y);
+    arenaPointerDown = null;
+    if (dx > 10 || dy > 10) return;
+    handleArenaPointer(event);
+});
+canvas.addEventListener('pointercancel', () => { arenaPointerDown = null; });
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
 // ==================== 8. SOCKET LISTENERS ====================
 
@@ -1203,3 +1257,20 @@ function loadLanHostInfo() {
 wireNavigationButtons();
 loadGameAssets();
 loadLanHostInfo();
+updateRotateOverlay();
+function refitResponsiveLayouts() {
+    updateRotateOverlay();
+    requestAnimationFrame(() => {
+        fitMapCanvasInFrame();
+        fitTownStage();
+    });
+}
+window.addEventListener('orientationchange', refitResponsiveLayouts);
+window.addEventListener('resize', refitResponsiveLayouts);
+if (screen.orientation) {
+    screen.orientation.addEventListener('change', refitResponsiveLayouts);
+}
+document.addEventListener('fullscreenchange', refitResponsiveLayouts);
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', refitResponsiveLayouts);
+}
