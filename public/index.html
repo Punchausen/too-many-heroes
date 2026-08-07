@@ -300,6 +300,101 @@
         #screen-party-detail.from-tavern #party-detail-stage {
             background-image: url('/assets/backgrounds/tavern.jpeg');
         }
+        #screen-party-detail.from-agency #party-detail-stage {
+            background-image: url('/assets/backgrounds/agency.jpeg');
+        }
+
+        /* Agency (CASTLE room) + mission briefing — same letterbox / translucent style as Tavern */
+        #screen-castle,
+        #screen-mission-briefing {
+            background: #000;
+            overflow: hidden;
+        }
+        #agency-stage-wrap,
+        #mission-briefing-stage-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+        #agency-stage,
+        #mission-briefing-stage {
+            position: relative;
+            flex-shrink: 0;
+            background: #000 center center / 100% 100% no-repeat;
+            background-image: url('/assets/backgrounds/agency.jpeg');
+        }
+        #agency-ui,
+        #mission-briefing-ui {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            padding: 16px 0 12px;
+            min-height: 0;
+        }
+        .agency-board-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 7.333% 0;
+            overflow: auto;
+        }
+        /* Keep mission board ~same size as before (max 640px), translucent */
+        .agency-board-panel {
+            width: min(640px, 100%);
+            box-sizing: border-box;
+            padding: 16px;
+            background: rgba(20, 16, 12, 0.55);
+            border: 1px solid rgba(255, 220, 160, 0.18);
+            color: #fff;
+        }
+        .agency-board-panel h3 {
+            color: #ff9800;
+            margin-top: 0;
+            font-size: 16px;
+        }
+        #screen-castle .hero-card,
+        #screen-mission-briefing .hero-card,
+        #screen-mission-briefing .party-list-row {
+            background: rgba(34, 34, 34, 0.55);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        #mission-briefing-title {
+            flex: 0 0 auto;
+            text-align: center;
+            color: #ff9800;
+            font-size: clamp(18px, 2.4vw, 26px);
+            font-weight: bold;
+            margin: 0 0 12px 0;
+            padding: 0 7.333%;
+        }
+        #screen-castle .btn-primary,
+        #screen-castle .btn-secondary,
+        #screen-mission-briefing .btn-primary,
+        #screen-mission-briefing .btn-secondary {
+            background: #ff9800;
+            color: #000;
+        }
+        #screen-castle .btn-primary:disabled,
+        #screen-castle .btn-secondary:disabled,
+        #screen-mission-briefing .btn-primary:disabled,
+        #screen-mission-briefing .btn-secondary:disabled {
+            background: #444;
+            color: #888;
+        }
+        #agency-ui .nav-row,
+        #mission-briefing-ui .nav-row {
+            flex: 0 0 auto;
+        }
         #party-detail-ui {
             position: absolute;
             inset: 0;
@@ -544,7 +639,7 @@
         <div id="town-stage-wrap">
             <div id="town-stage">
                 <!-- Hotspots: same ids as before so existing navigation wiring still works -->
-                <button type="button" id="btn-go-castle" class="town-tooltip" aria-label="Select Quest — go to Castle">
+                <button type="button" id="btn-go-castle" class="town-tooltip" aria-label="Select Quest — go to Heroes 4 Hire">
                     <img src="/assets/icons/quest_tooltip.png" alt="Select Quest">
                 </button>
                 <button type="button" id="btn-go-tavern" class="town-tooltip" aria-label="Hire Parties — go to Tavern">
@@ -610,52 +705,67 @@
         </div>
     </div>
 
-    <!-- [4] CASTLE — Mission Board only -->
+    <!-- [4] AGENCY (server room still CASTLE) — Mission Board -->
     <div id="screen-castle" class="game-screen">
-        <div class="screen-panel">
-            <h2 class="screen-title">THE CASTLE</h2>
-            <div class="gold-display">Gold: <span id="castle-gold">100</span>g</div>
-            <div class="col-panel" style="max-width:640px; margin:0 auto; width:100%;">
-                <h3 style="color: #ff9800;">Mission Board</h3>
-                <div id="castle-missions">
-                    <div id="mission-card-two-wizards" class="hero-card mission-card">
-                        <h4>Tale of Two Wizards</h4>
-                        <p>Help a dispute between Wizard neighbours by stealing some Spell books</p>
+        <div class="town-top-bar">
+            <span class="town-top-title">Heroes 4 Hire</span>
+            <span class="town-top-gold">Gold: <span id="castle-gold">100</span>g</span>
+        </div>
+        <div id="agency-stage-wrap">
+            <div id="agency-stage">
+                <div id="agency-ui">
+                    <div class="agency-board-wrap">
+                        <div class="agency-board-panel">
+                            <h3>Mission Board</h3>
+                            <div id="castle-missions">
+                                <div id="mission-card-two-wizards" class="hero-card mission-card">
+                                    <h4>Tale of Two Wizards</h4>
+                                    <p>Help a dispute between Wizard neighbours by stealing some Spell books</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="nav-row">
+                        <button id="btn-castle-return-hq" class="btn-primary">Return to Town</button>
                     </div>
                 </div>
-            </div>
-            <div class="nav-row">
-                <button id="btn-castle-return-hq" class="btn-secondary">Return to Town HQ</button>
             </div>
         </div>
     </div>
 
-    <!-- [4b] MISSION BRIEFING (client-only screen opened from Castle) -->
+    <!-- [4b] MISSION BRIEFING (client-only; Agency art) -->
     <div id="screen-mission-briefing" class="game-screen">
-        <div class="screen-panel">
-            <h2 id="mission-briefing-title" class="screen-title">Tale of Two Wizards</h2>
-            <div class="gold-display">Gold: <span id="mission-gold">100</span>g</div>
-            <div class="two-col">
-                <div class="col-panel">
-                    <h3>Your Parties</h3>
-                    <p class="field-hint">Tick 1–4 parties to bring into this mission. Click a name to view members.</p>
-                    <div id="mission-party-slots"></div>
-                </div>
-                <div class="col-panel">
-                    <h3 style="color: #ff9800;">Mission Briefing</h3>
-                    <div class="mission-desc" id="mission-briefing-body">Wizards are famously unsociable - which was always odd why they decided to build their towers so close to each other.  No-one knows who was the first to escalate name calling and obscene gestures, but it's worked out well for the Hero Talent Agency!  A reward is on offer to steal some of the other Wizard's spell books - but it sounds like another Talent Agency has been hired to do the same..
+        <div class="town-top-bar">
+            <span class="town-top-title">Heroes 4 Hire</span>
+            <span class="town-top-gold">Gold: <span id="mission-gold">100</span>g</span>
+        </div>
+        <div id="mission-briefing-stage-wrap">
+            <div id="mission-briefing-stage">
+                <div id="mission-briefing-ui">
+                    <h2 id="mission-briefing-title">Tale of Two Wizards</h2>
+                    <div class="tavern-two-col">
+                        <div class="tavern-col-panel">
+                            <h3>Your Parties</h3>
+                            <p class="field-hint">Tick 1–4 parties to bring into this mission. Click a name to view members.</p>
+                            <div id="mission-party-slots"></div>
+                        </div>
+                        <div class="tavern-col-panel">
+                            <h3 style="color: #ff9800;">Mission Briefing</h3>
+                            <div class="mission-desc" id="mission-briefing-body">Wizards are famously unsociable - which was always odd why they decided to build their towers so close to each other.  No-one knows who was the first to escalate name calling and obscene gestures, but it's worked out well for the Hero Talent Agency!  A reward is on offer to steal some of the other Wizard's spell books - but it sounds like another Talent Agency has been hired to do the same..
 
 OBJECTIVE:  Steal a spell book from the opposing Wizard tower, and bring it back to the paying Wizard before the 10th day is over.
 OR all other parties are knocked out.
 REWARD: 100g</div>
-                    <div class="nav-row" style="margin-top:16px;">
-                        <button id="btn-launch-quest" class="btn-primary">Launch Quest</button>
+                            <div class="nav-row" style="margin-top:16px;">
+                                <button id="btn-launch-quest" class="btn-primary">Launch Quest</button>
+                            </div>
+                            <p id="castle-quest-wait" style="display:none; color:#ff9800; text-align:center; margin-top:12px;">Waiting for opponent to launch quest...</p>
+                        </div>
                     </div>
-                    <p id="castle-quest-wait" style="display:none; color:#ff9800; text-align:center; margin-top:12px;">Waiting for opponent to launch quest...</p>
+                    <div class="nav-row">
+                        <button id="btn-mission-briefing-back" class="btn-primary">Back</button>
+                    </div>
                 </div>
-            </div>
-            <div class="nav-row">
-                <button id="btn-mission-briefing-back" class="btn-secondary">Back</button>
             </div>
         </div>
     </div>

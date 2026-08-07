@@ -132,6 +132,12 @@ function switchScreen(newState) {
     if (newState === 'TAVERN') {
         requestAnimationFrame(fitTavernStage);
     }
+    if (newState === 'CASTLE') {
+        requestAnimationFrame(fitAgencyStage);
+    }
+    if (newState === 'MISSION_BRIEFING') {
+        requestAnimationFrame(fitMissionBriefingStage);
+    }
     if (newState === 'PARTY_DETAIL') {
         requestAnimationFrame(fitPartyDetailStage);
     }
@@ -169,8 +175,24 @@ function fitTavernStage() {
     fitLetterboxStage('tavern-stage-wrap', 'tavern-stage', TAVERN_ART_W, TAVERN_ART_H, 'TAVERN');
 }
 
+const AGENCY_ART_W = 1024;
+const AGENCY_ART_H = 557;
+function fitAgencyStage() {
+    fitLetterboxStage('agency-stage-wrap', 'agency-stage', AGENCY_ART_W, AGENCY_ART_H, 'CASTLE');
+}
+
+function fitMissionBriefingStage() {
+    fitLetterboxStage(
+        'mission-briefing-stage-wrap',
+        'mission-briefing-stage',
+        AGENCY_ART_W,
+        AGENCY_ART_H,
+        'MISSION_BRIEFING'
+    );
+}
+
 function fitPartyDetailStage() {
-    // Same letterbox size as the tavern art when opened from The Rusty Scabbard.
+    // Tavern and Agency arts are both 1024×557 — letterbox the same either way.
     fitLetterboxStage(
         'party-detail-stage-wrap',
         'party-detail-stage',
@@ -383,19 +405,24 @@ function openPartyDetail(partyNumber, returnTo) {
     viewingPartyNumber = partyNumber;
 
     const fromTavern = returnTo === 'TAVERN';
+    // Mission briefing (and Agency) use the Heroes 4 Hire agency look.
+    const fromAgency = returnTo === 'MISSION_BRIEFING' || returnTo === 'CASTLE';
     const detailScreen = document.getElementById('screen-party-detail');
     if (detailScreen) {
         detailScreen.classList.toggle('from-tavern', fromTavern);
+        detailScreen.classList.toggle('from-agency', fromAgency);
     }
 
-    // Top bar stays as the location (same as Tavern home when opened from there).
+    // Top bar stays as the hub location you came from.
     const locationEl = document.getElementById('party-detail-location');
     if (locationEl) {
-        locationEl.textContent = fromTavern ? 'The Rusty Scabbard' : 'Party Details';
+        if (fromTavern) locationEl.textContent = 'The Rusty Scabbard';
+        else if (fromAgency) locationEl.textContent = 'Heroes 4 Hire';
+        else locationEl.textContent = 'Party Details';
     }
     const goldWrap = document.getElementById('party-detail-gold-wrap');
     const goldEl = document.getElementById('party-detail-gold');
-    if (goldWrap) goldWrap.style.display = fromTavern ? '' : 'none';
+    if (goldWrap) goldWrap.style.display = (fromTavern || fromAgency) ? '' : 'none';
     if (goldEl) goldEl.textContent = playerGold;
 
     // Inside the frame: large party name, then smaller "Party N".
@@ -1309,6 +1336,8 @@ function refitResponsiveLayouts() {
         fitMapCanvasInFrame();
         fitTownStage();
         fitTavernStage();
+        fitAgencyStage();
+        fitMissionBriefingStage();
         fitPartyDetailStage();
     });
 }
