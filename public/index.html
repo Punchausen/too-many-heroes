@@ -87,12 +87,94 @@
             width: auto;
             height: auto;
             object-fit: contain;
-            image-rendering: pixelated;
+            /* Smooth scale (same idea as arena map sprites) */
+            image-rendering: auto;
             display: block;
+        }
+
+        /* Subtle grey-on-black scrollbars (only appear when content overflows) */
+        .screen-panel,
+        .col-panel,
+        .tavern-col-panel,
+        .agency-board-wrap,
+        .agency-board-panel,
+        #arena-party-list,
+        #arena-party-detail,
+        #arena-map-scroll,
+        #party-detail-frame,
+        #tavern-ui,
+        #agency-ui,
+        #mission-briefing-ui {
+            scrollbar-width: thin;
+            scrollbar-color: #555 #111;
+        }
+        .screen-panel::-webkit-scrollbar,
+        .col-panel::-webkit-scrollbar,
+        .tavern-col-panel::-webkit-scrollbar,
+        .agency-board-wrap::-webkit-scrollbar,
+        .agency-board-panel::-webkit-scrollbar,
+        #arena-party-list::-webkit-scrollbar,
+        #arena-party-detail::-webkit-scrollbar,
+        #arena-map-scroll::-webkit-scrollbar,
+        #party-detail-frame::-webkit-scrollbar,
+        #tavern-ui::-webkit-scrollbar,
+        #agency-ui::-webkit-scrollbar,
+        #mission-briefing-ui::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .screen-panel::-webkit-scrollbar-track,
+        .col-panel::-webkit-scrollbar-track,
+        .tavern-col-panel::-webkit-scrollbar-track,
+        .agency-board-wrap::-webkit-scrollbar-track,
+        .agency-board-panel::-webkit-scrollbar-track,
+        #arena-party-list::-webkit-scrollbar-track,
+        #arena-party-detail::-webkit-scrollbar-track,
+        #arena-map-scroll::-webkit-scrollbar-track,
+        #party-detail-frame::-webkit-scrollbar-track,
+        #tavern-ui::-webkit-scrollbar-track,
+        #agency-ui::-webkit-scrollbar-track,
+        #mission-briefing-ui::-webkit-scrollbar-track {
+            background: #111;
+        }
+        .screen-panel::-webkit-scrollbar-thumb,
+        .col-panel::-webkit-scrollbar-thumb,
+        .tavern-col-panel::-webkit-scrollbar-thumb,
+        .agency-board-wrap::-webkit-scrollbar-thumb,
+        .agency-board-panel::-webkit-scrollbar-thumb,
+        #arena-party-list::-webkit-scrollbar-thumb,
+        #arena-party-detail::-webkit-scrollbar-thumb,
+        #arena-map-scroll::-webkit-scrollbar-thumb,
+        #party-detail-frame::-webkit-scrollbar-thumb,
+        #tavern-ui::-webkit-scrollbar-thumb,
+        #agency-ui::-webkit-scrollbar-thumb,
+        #mission-briefing-ui::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 4px;
+            border: 1px solid #111;
+        }
+        .screen-panel::-webkit-scrollbar-thumb:hover,
+        .col-panel::-webkit-scrollbar-thumb:hover,
+        .tavern-col-panel::-webkit-scrollbar-thumb:hover,
+        .agency-board-wrap::-webkit-scrollbar-thumb:hover,
+        .agency-board-panel::-webkit-scrollbar-thumb:hover,
+        #arena-party-list::-webkit-scrollbar-thumb:hover,
+        #arena-party-detail::-webkit-scrollbar-thumb:hover,
+        #arena-map-scroll::-webkit-scrollbar-thumb:hover,
+        #party-detail-frame::-webkit-scrollbar-thumb:hover,
+        #tavern-ui::-webkit-scrollbar-thumb:hover,
+        #agency-ui::-webkit-scrollbar-thumb:hover,
+        #mission-briefing-ui::-webkit-scrollbar-thumb:hover {
+            background: #777;
         }
         .hero-card-body { flex: 1 1 auto; min-width: 0; }
         .hero-card h4 { margin: 0 0 6px 0; color: #ff9800; }
-        .hero-card p { margin: 0; color: #aaa; font-size: 12px; }
+        /* Body / hint text — light cream for readability on dark / wood UIs */
+        :root {
+            --ui-body-text: rgba(255, 248, 231, 0.9);
+            --ui-body-text-muted: rgba(255, 248, 231, 0.75);
+        }
+        .hero-card p { margin: 0; color: var(--ui-body-text); font-size: 12px; }
         .nav-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
         .two-col { display: flex; gap: 20px; width: 100%; flex: 1; min-height: 0; }
         .col-panel { flex: 1; background: #1a1a1a; border: 1px solid #333; padding: 16px; min-height: 0; overflow: auto; }
@@ -105,12 +187,12 @@
         .outcome-draw { color: #ff9800; }
         .mission-card { cursor: pointer; transition: border-color 0.15s; }
         .mission-card:hover { border-color: #ff9800; }
-        .mission-desc { color: #ccc; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+        .mission-desc { color: var(--ui-body-text); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
         .party-list-row { display: flex; align-items: center; gap: 10px; background: #222; border: 1px solid #444; padding: 10px 12px; margin: 8px 0; cursor: pointer; }
         .party-list-row:hover { border-color: #ff9800; }
         .party-list-row .party-name-link { color: #fff; flex: 1; }
         .party-list-row input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
-        .field-hint { color: #888; font-size: 12px; margin: 0 0 8px 0; }
+        .field-hint { color: var(--ui-body-text-muted); font-size: 12px; margin: 0 0 8px 0; }
 
         /* Landing: splash art letterboxed (contain), UI centered over it */
         #screen-landing {
@@ -135,7 +217,7 @@
             padding: 12px;
             background: rgba(0, 0, 0, 0.45);
             border: none;
-            color: #aaa;
+            color: var(--ui-body-text);
             font-size: 13px;
             text-align: center;
         }
@@ -153,9 +235,14 @@
             justify-content: center;
             /* Depth matches the art's TOWN DESTINATIONS strip-ish scale */
             height: clamp(26px, 5.5vh, 36px);
-            background: linear-gradient(180deg, #6b4423 0%, #4a2c14 45%, #3a2210 100%);
-            border-bottom: 2px solid #2a180c;
-            box-shadow: inset 0 1px 0 rgba(255,220,160,0.15), 0 2px 6px rgba(0,0,0,0.5);
+            /* Stretch to bar height, tile sideways (avoids squashing the wood grain) */
+            background-color: #2a1a0c;
+            background-image: url('/assets/backgrounds/panel_horizontal_small.png');
+            background-repeat: repeat-x;
+            background-position: left center;
+            background-size: auto 100%;
+            border: none;
+            box-shadow: none;
             z-index: 2;
         }
         .town-top-title {
@@ -454,7 +541,7 @@
         }
         #party-detail-sub {
             text-align: center;
-            color: #aaa;
+            color: var(--ui-body-text-muted);
             margin: 0 0 16px 0;
             font-size: 14px;
         }
@@ -514,27 +601,30 @@
             width: 242px;
             min-width: 176px;
             max-width: 308px;
-            background: #141414;
-            border: 1px solid #333;
-            padding: 8px;
+            /* Stretched vertical wood panel art */
+            background: #2a1a0c url('/assets/backgrounds/panel_vertical.png') center center / 100% 100% no-repeat;
+            border: none;
+            padding: 10px 12px;
             overflow: auto;
             box-sizing: border-box;
             font-size: 12px;
-            color: #ccc;
+            color: #f0e0c0;
         }
         #arena-party-list h3,
         #arena-party-detail h3 {
             margin: 0 0 8px 0;
-            color: #aaa;
+            color: #fff8e7;
             font-size: 12px;
+            text-align: center;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
         }
         .arena-party-btn {
             display: block;
             width: 100%;
             text-align: left;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            color: #fff;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 220, 160, 0.28);
+            color: #fff8e7;
             padding: 8px;
             margin: 0 0 8px 0;
             font-family: monospace;
@@ -544,9 +634,13 @@
         }
         .arena-party-btn.selected {
             border-color: #ff9800;
-            background: rgba(255, 152, 0, 0.2);
+            background: rgba(255, 152, 0, 0.28);
         }
-        .arena-party-btn .sub { color: #888; font-size: 11px; margin-top: 4px; }
+        .arena-party-btn .sub {
+            color: rgba(240, 224, 192, 0.75);
+            font-size: 11px;
+            margin-top: 4px;
+        }
         #arena-map-scroll {
             flex: 1 1 auto;
             min-width: 0;
@@ -556,49 +650,85 @@
             background: #111;
             border: 2px solid #333;
             touch-action: pan-x pan-y;
-            /* Center the map when the frame is larger; JS toggles flex vs block */
+        }
+        /* Grows with the map; at least as big as the viewport so we can centre per-axis */
+        #arena-map-center {
             display: flex;
             align-items: center;
             justify-content: center;
+            box-sizing: border-box;
         }
         #gameCanvas {
             display: block;
             flex-shrink: 0;
             cursor: pointer;
-            /* Display size set by fitMapCanvasInFrame(); bitmap stays 550×500 */
-            width: 550px;
-            height: 500px;
+            /* Display size set by fitMapCanvasInFrame(); bitmap is 11×10 at 100px = 1100×1000 */
+            width: 1100px;
+            height: 1000px;
             touch-action: manipulation;
             -webkit-user-select: none;
             user-select: none;
         }
-        .arena-controls {
+        /* Arena bottom chrome: wider horizontal wood panel (stretched) */
+        #arena-bottom-bar {
             flex: 0 0 auto;
+            width: 100%;
+            box-sizing: border-box;
+            background-color: #2a1a0c;
+            background-image: url('/assets/backgrounds/panel_horizontal_large.png');
+            background-repeat: repeat-x;
+            background-position: left center;
+            background-size: auto 100%;
+            border: none;
+            box-shadow: none;
+            /* Tall enough for order buttons + round hint on the large panel art */
+            min-height: clamp(64px, 12vh, 96px);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .arena-controls {
             width: 100%;
             display: flex;
             gap: 8px;
-            padding: 6px 8px;
+            padding: 8px 10px 4px;
             align-items: center;
             flex-wrap: wrap;
             box-sizing: border-box;
-            background: #151515;
-            border-top: 1px solid #333;
+            background: transparent;
+            border: none;
+            color: #f0e0c0;
+        }
+        .arena-controls > span {
+            color: #fff8e7 !important;
+            text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
         }
         #arena-round-label {
-            flex: 0 0 auto;
-            color: #ff9800;
+            color: #fff8e7;
             width: 100%;
             text-align: right;
             margin: 0;
-            padding: 4px 10px 8px;
+            padding: 2px 12px 8px;
             font-size: 12px;
             box-sizing: border-box;
-            background: #151515;
+            background: transparent;
+            text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
         }
-        /* Selected-party members reuse .hero-card (same layout as Tavern / party detail) */
+        /* Selected-party members: light text over translucent dark cards on wood */
         #arena-party-detail .hero-card {
-            background: #222;
-            border: 1px solid #444;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 220, 160, 0.28);
+            color: #f0e0c0;
+        }
+        #arena-party-detail .hero-card h4 {
+            color: #ffcc80;
+            text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+        }
+        #arena-party-detail .hero-card p {
+            color: rgba(255, 248, 231, 0.9);
+        }
+        #arena-party-detail-body {
+            color: #f0e0c0;
         }
 
         /* Portrait lock message (mobile) */
@@ -618,7 +748,7 @@
         }
         #rotate-lock-overlay.active { display: flex; }
         #rotate-lock-overlay h2 { color: #ff9800; margin: 0 0 12px 0; }
-        #rotate-lock-overlay p { color: #aaa; margin: 0; max-width: 320px; line-height: 1.5; }
+        #rotate-lock-overlay p { color: var(--ui-body-text); margin: 0; max-width: 320px; line-height: 1.5; }
     </style>
 </head>
 <body>
@@ -644,7 +774,7 @@
             <div id="lan-host-info">
                 <p style="margin:0 0 8px 0; color:#ff9800;">LAN play — share this with the other player:</p>
                 <p id="lan-host-urls" style="margin:0; color:#00ffff; word-break:break-all;">Loading host address…</p>
-                <p style="margin:8px 0 0 0; color:#666; font-size:11px;">Same Room Code on both browsers. Only one PC needs to run the server.</p>
+                <p style="margin:8px 0 0 0; color:rgba(255,248,231,0.75); font-size:11px;">Same Room Code on both browsers. Only one PC needs to run the server.</p>
             </div>
         </div>
     </div>
@@ -805,21 +935,25 @@ REWARD: 100g</div>
                     <div id="arena-party-list-items"></div>
                 </div>
                 <div id="arena-map-scroll">
-                    <canvas id="gameCanvas" width="550" height="500"></canvas>
+                    <div id="arena-map-center">
+                        <canvas id="gameCanvas" width="1100" height="1000"></canvas>
+                    </div>
                 </div>
                 <div id="arena-party-detail">
                     <h3>SELECTED PARTY</h3>
                     <div id="arena-party-detail-body"></div>
                 </div>
             </div>
-            <div class="arena-controls">
-                <span style="color:#fff; margin-right:8px;">ORDER:</span>
-                <button id="btn-order-seek" class="btn-secondary order-btn" data-order="Seek">SEEK</button>
-                <button id="btn-order-advance" class="btn-secondary order-btn active" data-order="Advance">ADVANCE</button>
-                <button id="btn-order-march" class="btn-secondary order-btn" data-order="March">MARCH</button>
-                <button id="btn-lock-turn" class="btn-primary" style="margin-left:auto;">LOCK IN ORDERS FOR THIS ROUND</button>
+            <div id="arena-bottom-bar">
+                <div class="arena-controls">
+                    <span style="margin-right:8px;">ORDER:</span>
+                    <button id="btn-order-seek" class="btn-secondary order-btn" data-order="Seek">SEEK</button>
+                    <button id="btn-order-advance" class="btn-secondary order-btn active" data-order="Advance">ADVANCE</button>
+                    <button id="btn-order-march" class="btn-secondary order-btn" data-order="March">MARCH</button>
+                    <button id="btn-lock-turn" class="btn-primary" style="margin-left:auto;">LOCK IN ORDERS FOR THIS ROUND</button>
+                </div>
+                <p id="arena-round-label">ROUND: 1 / 4</p>
             </div>
-            <p id="arena-round-label">ROUND: 1 / 4</p>
         </div>
     </div>
 
@@ -828,7 +962,7 @@ REWARD: 100g</div>
         <div class="screen-panel">
             <h2 class="screen-title">GAME OVER</h2>
             <div id="game-over-banner" class="outcome-banner outcome-victory">VICTORY</div>
-            <p id="game-over-detail" style="text-align: center; color: #aaa; font-size: 15px; max-width: 640px; margin: 0 auto 12px;"></p>
+            <p id="game-over-detail" style="text-align: center; color: rgba(255,248,231,0.9); font-size: 15px; max-width: 640px; margin: 0 auto 12px;"></p>
             <p style="text-align: center; color: #ffff00; font-size: 18px;">Gold Earned: <span id="game-over-gold">0</span>g</p>
             <div class="nav-row">
                 <button id="btn-return-to-hq" class="btn-primary">Return to Town</button>

@@ -90,7 +90,9 @@ let lobbyStatusText = { p1: 'DISCONNECTED', p2: 'DISCONNECTED', readyP1: false, 
 
 // --- Arena grid layout (must match server.js ARENA_TILE_MAP) ---
 // Canvas is MAP ONLY; party list / details are HTML beside a scrollable map frame.
-const ARENA_GRID = { offsetX: 0, offsetY: 0, cellSize: 50, width: 11, height: 10 };
+// Native tile size in CSS/canvas pixels (map bitmap = 11×100 by 10×100 = 1100×1000).
+// Kept at 1:1 in the scroll frame — does not scale-to-fit the window.
+const ARENA_GRID = { offsetX: 0, offsetY: 0, cellSize: 100, width: 11, height: 10 };
 // Fog of War: each living friendly party reveals tiles within this Manhattan distance
 // (plain travel steps — Road/Forest move bonuses do NOT extend vision).
 const FOG_VISION_RANGE = 2;
@@ -209,39 +211,27 @@ function fitPartyDetailStage() {
     );
 }
 
-// If the map frame is larger than the map, scale the canvas up until width OR height
-// fits snugly, and keep it centered. If the frame is smaller, stay at 1:1 and scroll.
+// Keep the map at native tile size (100px cells → 1100×1000). Never scale-to-fit.
+// Centre on each axis that still fits; scroll only on axes that overflow.
 function fitMapCanvasInFrame() {
     const frame = document.getElementById('arena-map-scroll');
-    if (!frame || !canvas || currentRoomState !== 'TACTICAL_ARENA') return;
+    const center = document.getElementById('arena-map-center');
+    if (!frame || !center || !canvas || currentRoomState !== 'TACTICAL_ARENA') return;
 
-    const mapW = ARENA_GRID.width * ARENA_GRID.cellSize;
-    const mapH = ARENA_GRID.height * ARENA_GRID.cellSize;
+    syncArenaCanvasSize();
+    const mapW = canvas.width;
+    const mapH = canvas.height;
+    canvas.style.width = `${mapW}px`;
+    canvas.style.height = `${mapH}px`;
+
     const frameW = frame.clientWidth;
     const frameH = frame.clientHeight;
     if (frameW <= 0 || frameH <= 0) return;
 
-    let scale = Math.min(frameW / mapW, frameH / mapH);
-    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
-    // Never shrink below native size — user can scroll instead of squeezing tiles.
-    if (scale < 1) scale = 1;
-
-    const displayW = Math.round(mapW * scale);
-    const displayH = Math.round(mapH * scale);
-    canvas.style.width = `${displayW}px`;
-    canvas.style.height = `${displayH}px`;
-
-    // Flex-center when the map fits (or fills) the frame; block layout when scrolling.
-    const fits = displayW <= frameW + 1 && displayH <= frameH + 1;
-    frame.style.display = 'flex';
-    frame.style.alignItems = 'center';
-    frame.style.justifyContent = 'center';
-    // When content is larger than the frame, flex-centering fights scroll position —
-    // pin to top-left so scrollbars behave normally.
-    if (!fits) {
-        frame.style.alignItems = 'flex-start';
-        frame.style.justifyContent = 'flex-start';
-    }
+    // Wrapper is at least the viewport size so flex can centre the canvas when
+    // the map is narrower and/or shorter than the scroll frame.
+    center.style.width = `${Math.max(mapW, frameW)}px`;
+    center.style.height = `${Math.max(mapH, frameH)}px`;
 }
 
 // Phones/tablets: try OS landscape lock (often needs fullscreen); else show rotate overlay.
@@ -474,7 +464,9 @@ function drawPartySpritesOnTile(ap, tileX, tileY) {
         const dy = tileY + off.oy + pad;
 
         ctx.save();
-        ctx.imageSmoothingEnabled = false;
+        // Smooth (bilinear) scale for character sprites only — tiles stay crisp elsewhere.
+        ctx.imageSmoothingEnabled = true;
+        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
         if (faceLeft) {
             ctx.translate(dx + spriteSize, dy);
             ctx.scale(-1, 1);
@@ -484,6 +476,13 @@ function drawPartySpritesOnTile(ap, tileX, tileY) {
         }
         ctx.restore();
     });
+}
+
+function syncArenaCanvasSize() {
+    const w = ARENA_GRID.width * ARENA_GRID.cellSize;
+    const h = ARENA_GRID.height * ARENA_GRID.cellSize;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
 }
 
 // options.faction: if 'p1' or 'p2', use arena team portraits; otherwise neutral art.
@@ -529,7 +528,7 @@ function renderTavernRoster() {
     if (!container) return;
     container.innerHTML = '';
     if (myParties.length === 0) {
-        container.innerHTML = '<p style="color:#888;">No heroes recruited yet.</p>';
+        container.innerHTML = '<p style="color:rgba(255,248,231,0.9);">No heroes recruited yet.</p>';
         return;
     }
     myParties.forEach(party => {
@@ -547,7 +546,7 @@ function renderMissionPartyList() {
     if (!container) return;
     container.innerHTML = '';
     if (myParties.length === 0) {
-        container.innerHTML = '<p style="color:#888;">No parties yet — visit the Tavern.</p>';
+        container.innerHTML = '<p style="color:rgba(255,248,231,0.9);">No parties yet — visit the Tavern.</p>';
         return;
     }
     myParties.forEach(party => {
@@ -827,7 +826,7 @@ function renderArenaChrome() {
             listHost.appendChild(btn);
         });
         if (!mine.length) {
-            listHost.innerHTML = '<p style="color:#666;">No parties fielded.</p>';
+            listHost.innerHTML = '<p style="color:rgba(255,248,231,0.75);">No parties fielded.</p>';
         }
     }
 
@@ -835,16 +834,16 @@ function renderArenaChrome() {
     if (!detailHost) return;
     const selected = getSelectedArenaParty();
     if (!selected || selected.faction !== myFaction) {
-        detailHost.innerHTML = '<p style="color:#666;">Select a party from the list to view details.</p>';
+        detailHost.innerHTML = '<p style="color:rgba(255,248,231,0.7);">Select a party from the list to view details.</p>';
         return;
     }
     const plan = localPlans[selected.number];
     const shownOrder = (plan && plan.order) || selected.order || 'Advance';
     // Header stays custom; member rows match Tavern / party-detail via renderHeroCards.
     detailHost.innerHTML =
-        `<div style="color:${getTeamColor(myFaction)};font-weight:bold;font-size:14px;margin-bottom:6px;">`
+        `<div style="color:${getTeamColor(myFaction)};font-weight:bold;font-size:14px;margin-bottom:6px;text-shadow:0 1px 2px rgba(0,0,0,0.75);">`
         + `${selected.number}. ${selected.name}</div>`
-        + `<div style="color:#888;margin-bottom:10px;">Order: ${shownOrder}</div>`
+        + `<div style="color:rgba(255,248,231,0.8);margin-bottom:10px;">Order: ${shownOrder}</div>`
         + `<div id="arena-party-detail-members"></div>`;
     renderHeroCards(
         document.getElementById('arena-party-detail-members'),
@@ -1211,6 +1210,7 @@ function drawArenaScreen() {
 
 function renderActiveScene() {
     if (currentRoomState !== 'TACTICAL_ARENA') return;
+    syncArenaCanvasSize();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawArenaScreen();
 }
@@ -1224,6 +1224,7 @@ function startGameLoop() {
 }
 
 function loadGameAssets() {
+    syncArenaCanvasSize();
     preloadArenaPortraits();
     startGameLoop();
     switchScreen('LANDING');
@@ -1312,7 +1313,7 @@ function wireNavigationButtons() {
     document.getElementById('btn-lock-turn').addEventListener('click', onLockOrReadyClick);
 }
 
-// Map a pointer event to canvas bitmap coordinates (map is 550x500).
+// Map a pointer event to canvas bitmap coordinates (grid × cellSize).
 function canvasPointFromEvent(event) {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
