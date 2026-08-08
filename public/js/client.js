@@ -18,10 +18,10 @@ let currentRoomState = 'LANDING';  // which HTML screen is visible right now
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const logOverlay = document.getElementById('combat-log-overlay');
 
-// Team colours used on the arena canvas and in roster text.
-const TEAM_COLORS = { p1: '#00ffff', p2: '#ff9800' };
+// Team colours: leftmost player (p1) = Blue, rightmost (p2) = Red.
+// Orange is reserved for neutral UI chrome (order buttons), not team identity.
+const TEAM_COLORS = { p1: '#1e88e5', p2: '#d62828' };
 
 // Display-only hero stat fallbacks for cards when the server only sends a role name.
 const LOCAL_HERO_TEMPLATES = {
@@ -314,7 +314,7 @@ function findHubParty(number) {
     return myParties.find(p => p.number === number) || null;
 }
 
-// Portrait files for hire/detail rows. Missing roles keep an empty slot so layout stays aligned.
+// Neutral portraits for Tavern / Agency / party detail.
 const HERO_PORTRAITS = {
     Peasant: '/assets/characters/peasant_1.png',
     Elf: '/assets/characters/elf_1.png',
@@ -323,8 +323,34 @@ const HERO_PORTRAITS = {
     Knight: '/assets/characters/knight_1.png'
 };
 
-function renderHeroCards(container, heroes) {
+// Arena-only team-tinted portraits (p1 = Blue / left, p2 = Red / right).
+const HERO_PORTRAITS_TEAM = {
+    Peasant: {
+        p1: '/assets/characters/peasant_blue_1.png',
+        p2: '/assets/characters/peasant_red_1.png'
+    },
+    Wizard: {
+        p1: '/assets/characters/wizard_blue_1.png',
+        p2: '/assets/characters/wizard_red_1.png'
+    },
+    Barbarian: {
+        p1: '/assets/characters/barbarian_blue_1.png',
+        p2: '/assets/characters/barbarian_red_1.png'
+    },
+    Elf: {
+        p1: '/assets/characters/elf_blue_1.png',
+        p2: '/assets/characters/elf_red_1.png'
+    },
+    Knight: {
+        p1: '/assets/characters/knight_blue_1.png',
+        p2: '/assets/characters/knight_red_1.png'
+    }
+};
+
+// options.faction: if 'p1' or 'p2', use arena team portraits; otherwise neutral art.
+function renderHeroCards(container, heroes, options) {
     if (!container) return;
+    const faction = options && options.faction;
     container.innerHTML = '';
     heroes.forEach(h => {
         const card = document.createElement('div');
@@ -338,7 +364,12 @@ function renderHeroCards(container, heroes) {
             hpText = `${stats.hp} HP`;
         }
 
-        const portraitSrc = HERO_PORTRAITS[h.role];
+        let portraitSrc = null;
+        if ((faction === 'p1' || faction === 'p2') && HERO_PORTRAITS_TEAM[h.role]) {
+            portraitSrc = HERO_PORTRAITS_TEAM[h.role][faction];
+        } else {
+            portraitSrc = HERO_PORTRAITS[h.role] || null;
+        }
         const portraitHtml = portraitSrc
             ? `<img src="${portraitSrc}" alt="${h.role}">`
             : '';
@@ -608,7 +639,7 @@ function renderSyncedUI() {
     const roundLabel = document.getElementById('arena-round-label');
     if (roundLabel) {
         roundLabel.textContent = arenaPhase === 'DEPLOYMENT'
-            ? 'DEPLOYMENT: select a party, tap a red-bordered square, then READY'
+            ? 'DEPLOYMENT: select a party, tap a bordered square in your zone, then READY'
             : `DAY: ${currentRound} / ${maxRounds}`;
     }
 
@@ -669,20 +700,17 @@ function renderArenaChrome() {
     }
     const plan = localPlans[selected.number];
     const shownOrder = (plan && plan.order) || selected.order || 'Advance';
-    let html = `<div style="color:${getTeamColor(myFaction)};font-weight:bold;font-size:14px;margin-bottom:6px;">`
+    // Header stays custom; member rows match Tavern / party-detail via renderHeroCards.
+    detailHost.innerHTML =
+        `<div style="color:${getTeamColor(myFaction)};font-weight:bold;font-size:14px;margin-bottom:6px;">`
         + `${selected.number}. ${selected.name}</div>`
-        + `<div style="color:#888;margin-bottom:10px;">Order: ${shownOrder}</div>`;
-    selected.members.forEach(h => {
-        const melee = h.melee != null ? h.melee : (LOCAL_HERO_TEMPLATES[h.role] || {}).melee;
-        const range = h.range != null ? h.range : (LOCAL_HERO_TEMPLATES[h.role] || {}).range;
-        const dead = h.hp <= 0;
-        html += `<div class="arena-member-card">`
-            + `<div class="role${dead ? ' dead' : ''}">${h.role.toUpperCase()}</div>`
-            + `<div class="${dead ? 'dead' : ''}">${dead ? 'UNCONSCIOUS' : `❤ ${h.hp}/${h.baseHp} HP`}</div>`
-            + `<div style="color:#aaa;">⚔ ${melee} Melee   🏹 ${range} Range</div>`
-            + `</div>`;
-    });
-    detailHost.innerHTML = html;
+        + `<div style="color:#888;margin-bottom:10px;">Order: ${shownOrder}</div>`
+        + `<div id="arena-party-detail-members"></div>`;
+    renderHeroCards(
+        document.getElementById('arena-party-detail-members'),
+        selected.members,
+        { faction: selected.faction } // Blue/Red tinted portraits in the arena only
+    );
 }
 
 function getSelectedArenaParty() {
@@ -824,7 +852,7 @@ function isTileOccupiedByLiving(x, y, skipUid) {
     return getOccupantAt(x, y, skipUid) !== null;
 }
 
-// Thick red outline around the outer edge of the local player's deploy zone.
+// Thick outline around the outer edge of the local player's deploy zone (team colour).
 function drawDeploymentBoundary(faction) {
     const cells = getClientDeployCells(faction);
     if (!cells.length) return;
@@ -832,7 +860,7 @@ function drawDeploymentBoundary(faction) {
     const size = ARENA_GRID.cellSize;
 
     ctx.save();
-    ctx.strokeStyle = '#d62828';
+    ctx.strokeStyle = getTeamColor(faction);
     ctx.lineWidth = 4;
     ctx.lineJoin = 'miter';
 
@@ -926,6 +954,9 @@ function drawArenaScreen() {
     // Fog of War: tiles within 2 travel steps of any living friendly party.
     const visibleTiles = buildVisibleTileSet();
 
+    // Home towers: map data still uses RED tile codes, but we paint left=Blue / right=Red.
+    const buildingAnchors = findClientBuildingAnchors();
+
     // --- Grid tiles ---
     for (let y = 0; y < ARENA_GRID.height; y++) {
         for (let x = 0; x < ARENA_GRID.width; x++) {
@@ -934,7 +965,15 @@ function drawArenaScreen() {
             const tile = ARENA_TILE_MAP[y][x];
             const fogged = !isTileVisible(visibleTiles, x, y);
 
-            ctx.fillStyle = ARENA_TILE_COLORS[tile] || ARENA_TILE_COLORS.LG;
+            let fill = ARENA_TILE_COLORS[tile] || ARENA_TILE_COLORS.LG;
+            if (tile === 'RED') {
+                if (buildingAnchors.left && buildingAnchors.left.x === x && buildingAnchors.left.y === y) {
+                    fill = TEAM_COLORS.p1; // leftmost home = Blue
+                } else if (buildingAnchors.right && buildingAnchors.right.x === x && buildingAnchors.right.y === y) {
+                    fill = TEAM_COLORS.p2; // rightmost home = Red
+                }
+            }
+            ctx.fillStyle = fill;
             ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
 
             // Darken tiles outside your vision so fog is obvious
@@ -947,14 +986,16 @@ function drawArenaScreen() {
             ctx.strokeRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
 
             if (pathHighlight.some(c => c.x === x && c.y === y)) {
-                ctx.fillStyle = myFaction === 'p1' ? 'rgba(0, 255, 255, 0.35)' : 'rgba(255, 152, 0, 0.35)';
+                ctx.fillStyle = myFaction === 'p1'
+                    ? 'rgba(30, 136, 229, 0.35)'
+                    : 'rgba(214, 40, 40, 0.35)';
                 ctx.fillRect(cx + 2, cy + 2, ARENA_GRID.cellSize - 4, ARENA_GRID.cellSize - 4);
             }
         }
     }
 
     // Draw a small book shape in the OWNER tower's colour (emoji ignore fillStyle).
-    // So an Orange spell book stays orange whether Cyan or Orange is holding it.
+    // So a Red spell book stays red whether Blue or Red is holding it.
     function drawSpellBookIcon(centerX, centerY, ownerFaction) {
         const bookColor = getTeamColor(ownerFaction);
         const w = 14;
@@ -1029,7 +1070,7 @@ function drawArenaScreen() {
         ctx.restore();
     }
 
-    // Red deploy boundary for your faction during deployment.
+    // Deploy boundary in your team colour during deployment.
     if (arenaPhase === 'DEPLOYMENT' && (myFaction === 'p1' || myFaction === 'p2')) {
         drawDeploymentBoundary(myFaction);
     }
@@ -1319,9 +1360,12 @@ socket.on('resolve-round', (data) => {
     updateLockTurnButton();
     renderSyncedUI();
 
-    if (logOverlay && data.log) {
-        logOverlay.innerHTML += `<div style="margin-bottom: 6px; border-left: 2px solid #00ff00; padding-left: 6px; color: #00ff00; font-family: monospace;">${data.log}</div>`;
-        logOverlay.scrollTop = logOverlay.scrollHeight;
+    // Combat log UI removed — dump to the browser console for debugging.
+    if (data.log) {
+        const plain = String(data.log)
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, '');
+        console.log('[Combat Arena]\n' + plain);
     }
 });
 

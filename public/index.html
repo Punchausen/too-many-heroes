@@ -480,22 +480,27 @@
             min-height: 0;
             box-sizing: border-box;
         }
-        #arena-header {
-            flex: 0 0 auto;
-            display: flex;
+        /* Arena top bar reuses .town-top-bar (wood strip) for hub consistency */
+        #arena-header.town-top-bar {
             justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            padding: 8px 12px;
-            background: #1e1e1e;
-            border-bottom: 2px solid #333;
-            color: #fff;
-            font-weight: bold;
-            font-size: 14px;
+            padding-left: clamp(10px, 2vw, 20px);
+            padding-right: clamp(10px, 2vw, 20px);
         }
-        #arena-header-title { color: #fff; }
+        #arena-header-title {
+            color: #f0e0c0;
+            font-weight: bold;
+            font-size: clamp(11px, 1.7vw, 15px);
+            letter-spacing: 0.06em;
+            text-shadow: 0 1px 0 #1a1008;
+        }
         #arena-header-player { margin-left: 4px; }
-        #arena-header-phase { color: #ff9800; white-space: nowrap; }
+        #arena-header-phase {
+            color: #fff;
+            white-space: nowrap;
+            font-weight: bold;
+            font-size: clamp(11px, 1.7vw, 15px);
+            text-shadow: 0 1px 0 #1a1008;
+        }
         #arena-body {
             flex: 1 1 auto;
             min-height: 0;
@@ -505,10 +510,10 @@
         }
         #arena-party-list,
         #arena-party-detail {
-            flex: 0 0 220px;
-            width: 220px;
-            min-width: 160px;
-            max-width: 280px;
+            flex: 0 0 242px;
+            width: 242px;
+            min-width: 176px;
+            max-width: 308px;
             background: #141414;
             border: 1px solid #333;
             padding: 8px;
@@ -567,18 +572,6 @@
             -webkit-user-select: none;
             user-select: none;
         }
-        #combat-log-overlay {
-            flex: 0 0 72px;
-            height: 72px;
-            width: 100%;
-            background: #0a0a0a;
-            border-top: 2px solid #222;
-            padding: 6px 10px;
-            color: #00ff00;
-            font-size: 12px;
-            overflow-y: auto;
-            box-sizing: border-box;
-        }
         .arena-controls {
             flex: 0 0 auto;
             width: 100%;
@@ -602,14 +595,11 @@
             box-sizing: border-box;
             background: #151515;
         }
-        .arena-member-card {
+        /* Selected-party members reuse .hero-card (same layout as Tavern / party detail) */
+        #arena-party-detail .hero-card {
             background: #222;
             border: 1px solid #444;
-            padding: 8px;
-            margin: 0 0 8px 0;
         }
-        .arena-member-card .role { color: #ff9800; font-weight: bold; }
-        .arena-member-card .dead { color: #ff5555; }
 
         /* Portrait lock message (mobile) */
         #rotate-lock-overlay {
@@ -802,10 +792,10 @@ REWARD: 100g</div>
     <!-- [5] TACTICAL ARENA — fixed side panels + scrollable map -->
     <div id="screen-tactical-arena" class="game-screen">
         <div id="arena-chrome">
-            <div id="arena-header">
+            <div id="arena-header" class="town-top-bar">
                 <div id="arena-header-title">
                     COMBAT ARENA —
-                    <span id="arena-header-player" style="color:#00ffff;">Hero</span>
+                    <span id="arena-header-player">Hero</span>
                 </div>
                 <div id="arena-header-phase">DEPLOYMENT PHASE</div>
             </div>
@@ -821,9 +811,6 @@ REWARD: 100g</div>
                     <h3>SELECTED PARTY</h3>
                     <div id="arena-party-detail-body"></div>
                 </div>
-            </div>
-            <div id="combat-log-overlay">
-                <div style="color: #888; border-bottom: 1px dashed #333; padding-bottom: 4px; margin-bottom: 6px;">MASTER REF CONTROL LOG TERMINAL LINE:</div>
             </div>
             <div class="arena-controls">
                 <span style="color:#fff; margin-right:8px;">ORDER:</span>
