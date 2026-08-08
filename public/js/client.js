@@ -68,6 +68,13 @@ let arenaPlayerNames = { p1: '', p2: '' };
 // Which party token you selected (matches server uid, e.g. "p1-2").
 let selectedPartyUid = null;
 
+// Stable 2×2 corner assignment per party: layout[memberIndex] = corner 0..3 (TL,TR,BL,BR).
+let partyCornerLayout = {};
+// Last move direction per party uid: 'up'|'down'|'left'|'right' (controls sprite facing).
+let partyLastMoveDir = {};
+// Last known tile per party uid — used to detect moves for facing updates.
+let partyLastPos = {};
+
 // Combat planning: one entry per party number you control this round.
 // { order: 'Advance', path: [{x,y}, ...] }
 let localPlans = {};
@@ -347,6 +354,138 @@ const HERO_PORTRAITS_TEAM = {
     }
 };
 
+// --- Arena map party sprites (2×2 portraits on a tile) ---
+
+const portraitImgCache = {};
+
+function getCachedPortrait(src) {
+    if (!src) return null;
+    if (portraitImgCache[src]) return portraitImgCache[src];
+    const img = new Image();
+    img.src = src;
+    portraitImgCache[src] = img;
+    return img;
+}
+
+function preloadArenaPortraits() {
+    Object.keys(HERO_PORTRAITS_TEAM).forEach(role => {
+        getCachedPortrait(HERO_PORTRAITS_TEAM[role].p1);
+        getCachedPortrait(HERO_PORTRAITS_TEAM[role].p2);
+    });
+}
+
+function resetPartyVisualState() {
+    partyCornerLayout = {};
+    partyLastMoveDir = {};
+    partyLastPos = {};
+}
+
+function shuffleCornerSlots() {
+    const corners = [0, 1, 2, 3];
+    for (let i = corners.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = corners[i];
+        corners[i] = corners[j];
+        corners[j] = tmp;
+    }
+    return corners;
+}
+
+function ensurePartyCornerLayout(uid) {
+    if (!partyCornerLayout[uid]) {
+        // memberIndex i always draws in layout[i]; KO leaves that corner empty.
+        partyCornerLayout[uid] = shuffleCornerSlots();
+    }
+    return partyCornerLayout[uid];
+}
+
+function ensurePartyFacing(ap) {
+    if (!partyLastMoveDir[ap.uid]) {
+        // Deploy default: Blue (p1) faces right, Red (p2) faces left.
+        partyLastMoveDir[ap.uid] = ap.faction === 'p2' ? 'left' : 'right';
+    }
+    return partyLastMoveDir[ap.uid];
+}
+
+// Up/Left → face left (mirror). Down/Right → face right (as drawn).
+function partyFacesLeft(dir) {
+    return dir === 'left' || dir === 'up';
+}
+
+function updatePartyFacingFromPositions(parties) {
+    (parties || []).forEach(ap => {
+        if (!ap || !ap.uid) return;
+        ensurePartyCornerLayout(ap.uid);
+
+        // During deployment, always Blue→right / Red→left (moving within the zone must not flip them).
+        if (arenaPhase === 'DEPLOYMENT') {
+            partyLastMoveDir[ap.uid] = ap.faction === 'p2' ? 'left' : 'right';
+            if (typeof ap.x === 'number' && typeof ap.y === 'number') {
+                partyLastPos[ap.uid] = { x: ap.x, y: ap.y };
+            }
+            return;
+        }
+
+        ensurePartyFacing(ap);
+        if (typeof ap.x !== 'number' || typeof ap.y !== 'number') return;
+        const prev = partyLastPos[ap.uid];
+        if (prev && (prev.x !== ap.x || prev.y !== ap.y)) {
+            const dx = ap.x - prev.x;
+            const dy = ap.y - prev.y;
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                if (dx > 0) partyLastMoveDir[ap.uid] = 'right';
+                else if (dx < 0) partyLastMoveDir[ap.uid] = 'left';
+            } else {
+                if (dy > 0) partyLastMoveDir[ap.uid] = 'down';
+                else if (dy < 0) partyLastMoveDir[ap.uid] = 'up';
+            }
+        }
+        partyLastPos[ap.uid] = { x: ap.x, y: ap.y };
+    });
+}
+
+function drawPartySpritesOnTile(ap, tileX, tileY) {
+    const size = ARENA_GRID.cellSize;
+    const half = size / 2;
+    const pad = 1;
+    const spriteSize = half - pad * 2;
+    const layout = ensurePartyCornerLayout(ap.uid);
+    const faceLeft = partyFacesLeft(ensurePartyFacing(ap));
+
+    // Corners: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+    const cornerOffset = [
+        { ox: 0, oy: 0 },
+        { ox: half, oy: 0 },
+        { ox: 0, oy: half },
+        { ox: half, oy: half }
+    ];
+
+    ap.members.forEach((member, memberIndex) => {
+        if (!member || member.hp <= 0) return; // KO → leave that corner empty
+        const corner = layout[memberIndex];
+        if (corner === undefined) return;
+        const teamArt = HERO_PORTRAITS_TEAM[member.role];
+        const src = teamArt ? teamArt[ap.faction] : null;
+        const img = getCachedPortrait(src);
+        if (!img || !img.complete || !img.naturalWidth) return;
+
+        const off = cornerOffset[corner];
+        const dx = tileX + off.ox + pad;
+        const dy = tileY + off.oy + pad;
+
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        if (faceLeft) {
+            ctx.translate(dx + spriteSize, dy);
+            ctx.scale(-1, 1);
+            ctx.drawImage(img, 0, 0, spriteSize, spriteSize);
+        } else {
+            ctx.drawImage(img, dx, dy, spriteSize, spriteSize);
+        }
+        ctx.restore();
+    });
+}
+
 // options.faction: if 'p1' or 'p2', use arena team portraits; otherwise neutral art.
 function renderHeroCards(container, heroes, options) {
     if (!container) return;
@@ -582,6 +721,7 @@ function applyStateSync(data) {
         if (data.arena.currentRound) currentRound = data.arena.currentRound;
         if (data.arena.phase) arenaPhase = data.arena.phase;
         if (data.arena.parties) {
+            updatePartyFacingFromPositions(data.arena.parties);
             arenaParties = data.arena.parties;
             // Regular sync: keep paths the player is still drawing unless phase just changed.
             syncLocalPlansFromArena(false);
@@ -1028,7 +1168,7 @@ function drawArenaScreen() {
         drawSpellBookIcon(cx, cy, book.ownerFaction);
     });
 
-    // --- Party tokens (living only; enemies hidden in fog) ---
+    // --- Party tokens: 2×2 team portraits (living members only; enemies hidden in fog) ---
     arenaParties.forEach(ap => {
         if (typeof ap.x !== 'number' || typeof ap.y !== 'number') return;
         // Defeated parties leave the board entirely
@@ -1040,33 +1180,26 @@ function drawArenaScreen() {
 
         const cx = ARENA_GRID.offsetX + (ap.x * ARENA_GRID.cellSize);
         const cy = ARENA_GRID.offsetY + (ap.y * ARENA_GRID.cellSize);
-        const color = getTeamColor(ap.faction);
+        drawPartySpritesOnTile(ap, cx, cy);
 
-        ctx.fillStyle = color;
-        ctx.fillRect(cx + 6, cy + 14, ARENA_GRID.cellSize - 12, ARENA_GRID.cellSize - 22);
-        ctx.fillStyle = '#000';
-        ctx.font = 'bold 14px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(String(ap.number), cx + ARENA_GRID.cellSize / 2, cy + ARENA_GRID.cellSize - 8);
-
-        // Carried book above token — ALWAYS the book owner's colour (not the carrier's)
+        // Carried book above the tile — ALWAYS the book owner's colour (not the carrier's)
         if (ap.carryingBook) {
             drawSpellBookIcon(
                 cx + ARENA_GRID.cellSize / 2,
-                cy + 8,
+                cy + 4,
                 ap.carryingBook
             );
         }
     });
 
-    // Thick outline on the selected living party's tile (deployment AND combat).
+    // Outline on the selected living party's tile (deployment AND combat).
     if (selected && partyIsAlive(selected) && typeof selected.x === 'number' && typeof selected.y === 'number') {
         const cx = ARENA_GRID.offsetX + (selected.x * ARENA_GRID.cellSize);
         const cy = ARENA_GRID.offsetY + (selected.y * ARENA_GRID.cellSize);
         ctx.save();
         ctx.strokeStyle = getTeamColor(selected.faction);
-        ctx.lineWidth = 4;
-        ctx.strokeRect(cx + 2, cy + 2, ARENA_GRID.cellSize - 4, ARENA_GRID.cellSize - 4);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx + 1, cy + 1, ARENA_GRID.cellSize - 2, ARENA_GRID.cellSize - 2);
         ctx.restore();
     }
 
@@ -1091,6 +1224,7 @@ function startGameLoop() {
 }
 
 function loadGameAssets() {
+    preloadArenaPortraits();
     startGameLoop();
     switchScreen('LANDING');
 }
@@ -1302,9 +1436,11 @@ socket.on('STATE_SYNC', (data) => { applyStateSync(data); });
 
 socket.on('transition-stage', (data) => {
     if (data.stage === 'combat-arena') {
-        arenaParties = data.arenaParties || [];
+        resetPartyVisualState();
         groundBooks = [];
         arenaPhase = 'DEPLOYMENT';
+        arenaParties = data.arenaParties || [];
+        updatePartyFacingFromPositions(arenaParties);
         selectedPartyUid = null;
         localPlans = {};
         syncLocalPlansFromArena(true);
@@ -1344,7 +1480,9 @@ socket.on('GAME_OVER_SUMMARY', (data) => {
 });
 
 socket.on('resolve-round', (data) => {
-    arenaParties = data.arenaParties || arenaParties;
+    const nextParties = data.arenaParties || arenaParties;
+    updatePartyFacingFromPositions(nextParties);
+    arenaParties = nextParties;
     if (data.groundBooks) groundBooks = data.groundBooks;
     if (data.nextRound) currentRound = data.nextRound;
 
