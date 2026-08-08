@@ -759,10 +759,13 @@ function renderSyncedUI() {
 
     renderMissionPartyList();
 
+    // Icon buttons keep baked-in labels; only the gold cost span is updated.
     const hireBtn = document.getElementById('btn-hire-party');
+    const hireCostEl = document.getElementById('hire-party-cost');
     if (hireBtn) {
-        hireBtn.textContent = `HIRE PARTY (${currentOffer.cost || 0}g)`;
-        hireBtn.disabled = playerGold < (currentOffer.cost || 0) || !(currentOffer.members || []).length;
+        const hireCost = currentOffer.cost || 0;
+        if (hireCostEl) hireCostEl.textContent = `- ${hireCost}g`;
+        hireBtn.disabled = playerGold < hireCost || !(currentOffer.members || []).length;
     }
     const rerollBtn = document.getElementById('btn-reroll-offer');
     if (rerollBtn) rerollBtn.disabled = playerGold < 5;

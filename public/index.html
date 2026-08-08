@@ -318,6 +318,61 @@
             width: 12.89%; /* 220 * 0.6 / 1024 */
         }
 
+        /* Pixel art action buttons (Hire / Reroll / Return / Back) — same glow as town tooltips */
+        .icon-btn {
+            position: relative;
+            display: inline-block;
+            border: none;
+            background: transparent;
+            padding: 0;
+            margin: 6px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            vertical-align: middle;
+        }
+        .icon-btn:focus { outline: none; }
+        .icon-btn img {
+            display: block;
+            height: 52px;
+            width: auto;
+            max-width: min(320px, 90vw);
+            pointer-events: none;
+            transition: filter 0.15s ease;
+        }
+        /* +50% vs previous 56px so Return to Town reads clearly at the footer */
+        .icon-btn--return img { height: 84px; max-width: min(540px, 94vw); }
+        .icon-btn--back img { height: 48px; }
+        .icon-btn:hover:not(:disabled) img,
+        .icon-btn:focus-visible:not(:disabled) img {
+            filter:
+                drop-shadow(0 0 4px rgba(255, 230, 100, 0.7))
+                drop-shadow(0 0 10px rgba(255, 210, 60, 0.45));
+        }
+        /* Can't afford: grey + dim, no hover glow */
+        .icon-btn:disabled {
+            cursor: not-allowed;
+            filter: grayscale(1) brightness(0.55);
+        }
+        /* Cost reads as a continuation of the baked-in label (measured from art pixel ends) */
+        .icon-btn-cost {
+            position: absolute;
+            top: 48%;
+            transform: translateY(-50%);
+            color: #D2AD83;
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 15px;
+            line-height: 1;
+            text-align: left;
+            pointer-events: none;
+            white-space: nowrap;
+            text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+        }
+        /* "Hire Party" label ends ~63.5% across the PNG */
+        #btn-hire-party .icon-btn-cost { left: 65.5%; }
+        /* "Re-roll" label ends ~56.7% across the PNG */
+        #btn-reroll-offer .icon-btn-cost { left: 58.5%; }
+
         /* Tavern: letterboxed art + wood bar; party columns narrower + translucent */
         #screen-tavern {
             background: #000;
@@ -549,11 +604,6 @@
             background: rgba(34, 34, 34, 0.55);
             border-color: rgba(255, 255, 255, 0.18);
         }
-        #screen-party-detail #btn-party-detail-back {
-            background: #ff9800;
-            color: #000;
-        }
-
         /* Arena: fixed chrome + scrollable map frame */
         #screen-tactical-arena {
             background: #0a0a0a;
@@ -816,13 +866,21 @@
                             <h3 id="tavern-offer-title" style="color: #ff9800;">Available Contract</h3>
                             <div id="tavern-offer"></div>
                             <div class="nav-row">
-                                <button id="btn-hire-party" class="btn-primary">HIRE PARTY</button>
-                                <button id="btn-reroll-offer" class="btn-primary">REROLL (5g)</button>
+                                <button id="btn-hire-party" class="icon-btn" type="button" aria-label="Hire Party">
+                                    <img src="/assets/icons/hire_party_button.png" alt="">
+                                    <span class="icon-btn-cost" id="hire-party-cost">- 0g</span>
+                                </button>
+                                <button id="btn-reroll-offer" class="icon-btn" type="button" aria-label="Re-roll">
+                                    <img src="/assets/icons/re-roll_button.png" alt="">
+                                    <span class="icon-btn-cost" id="reroll-offer-cost">- 5g</span>
+                                </button>
                             </div>
                         </div>
                     </div>
                     <div class="nav-row">
-                        <button id="btn-tavern-return-hq" class="btn-primary">Return to Town</button>
+                        <button id="btn-tavern-return-hq" class="icon-btn icon-btn--return" type="button" aria-label="Return to Town">
+                            <img src="/assets/icons/return_to_town_button.png" alt="Return to Town">
+                        </button>
                     </div>
                 </div>
             </div>
@@ -846,7 +904,9 @@
                         <p id="party-detail-sub">Party</p>
                         <div id="party-detail-members"></div>
                         <div class="nav-row">
-                            <button id="btn-party-detail-back" class="btn-primary">Back</button>
+                            <button id="btn-party-detail-back" class="icon-btn icon-btn--back" type="button" aria-label="Back">
+                                <img src="/assets/icons/back_button.png" alt="Back">
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -875,7 +935,9 @@
                         </div>
                     </div>
                     <div class="nav-row">
-                        <button id="btn-castle-return-hq" class="btn-primary">Return to Town</button>
+                        <button id="btn-castle-return-hq" class="icon-btn icon-btn--return" type="button" aria-label="Return to Town">
+                            <img src="/assets/icons/return_to_town_button.png" alt="Return to Town">
+                        </button>
                     </div>
                 </div>
             </div>
@@ -906,13 +968,17 @@ OBJECTIVE:  Steal a spell book from the opposing Wizard tower, and bring it back
 OR all other parties are knocked out.
 REWARD: 100g</div>
                             <div class="nav-row" style="margin-top:16px;">
-                                <button id="btn-launch-quest" class="btn-primary">Launch Quest</button>
+                                <button id="btn-launch-quest" class="icon-btn icon-btn--return" type="button" aria-label="Launch Quest">
+                                    <img src="/assets/icons/launch_quest_button.png" alt="Launch Quest">
+                                </button>
                             </div>
                             <p id="castle-quest-wait" style="display:none; color:#ff9800; text-align:center; margin-top:12px;">Waiting for opponent to launch quest...</p>
                         </div>
                     </div>
                     <div class="nav-row">
-                        <button id="btn-mission-briefing-back" class="btn-primary">Back</button>
+                        <button id="btn-mission-briefing-back" class="icon-btn icon-btn--back" type="button" aria-label="Back">
+                            <img src="/assets/icons/back_button.png" alt="Back">
+                        </button>
                     </div>
                 </div>
             </div>
@@ -965,7 +1031,9 @@ REWARD: 100g</div>
             <p id="game-over-detail" style="text-align: center; color: rgba(255,248,231,0.9); font-size: 15px; max-width: 640px; margin: 0 auto 12px;"></p>
             <p style="text-align: center; color: #ffff00; font-size: 18px;">Gold Earned: <span id="game-over-gold">0</span>g</p>
             <div class="nav-row">
-                <button id="btn-return-to-hq" class="btn-primary">Return to Town</button>
+                <button id="btn-return-to-hq" class="icon-btn icon-btn--return" type="button" aria-label="Return to Town">
+                    <img src="/assets/icons/return_to_town_button.png" alt="Return to Town">
+                </button>
             </div>
         </div>
     </div>
