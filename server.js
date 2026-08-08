@@ -101,11 +101,11 @@ const HERO_TEMPLATES = {
     Peasant:   { hp: 30,  melee: 10, range: 0 },
     Barbarian: { hp: 100, melee: 40, range: 0 },
     Elf:       { hp: 50,  melee: 15, range: 25 },
-    Mage:      { hp: 40,  melee: 10, range: 35 },
+    Wizard:    { hp: 40,  melee: 10, range: 35 },
     Knight:    { hp: 120, melee: 25, range: 0 }
 };
 
-const TAVERN_POOL = ['Barbarian', 'Elf', 'Mage', 'Knight', 'Peasant'];
+const TAVERN_POOL = ['Barbarian', 'Elf', 'Wizard', 'Knight', 'Peasant'];
 
 // All 100 party names from product — pick randomly, avoid reuse until pool is exhausted.
 const PARTY_NAME_POOL = [
@@ -149,7 +149,7 @@ let playerState = {
 function getPlayerRoomState(faction) {
     if (roomState === 'LANDING') return 'LANDING';
     if (roomState === 'TACTICAL_ARENA') return 'TACTICAL_ARENA';
-    // GAME_OVER is per-player: once they click Return, they see Town HQ again.
+    // GAME_OVER is per-player: once they click Return, they see Town again.
     if (roomState === 'GAME_OVER') {
         if (faction && postMatchReturned[faction]) {
             return playerState[faction].currentRoom || 'TOWN_HQ';

@@ -61,7 +61,36 @@
         .btn-secondary { background: #555; color: #fff; border: none; padding: 10px 20px; font-family: monospace; font-size: 13px; cursor: pointer; margin: 6px; }
         .input-field { background: #222; border: 2px solid #444; color: #fff; padding: 10px; font-family: monospace; font-size: 14px; width: 280px; margin: 8px 0; box-sizing: border-box; }
         .input-field:disabled { background: #1a1a1a; color: #666; cursor: not-allowed; }
-        .hero-card { background: #222; border: 1px solid #444; padding: 12px; margin: 8px 0; }
+        .hero-card {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 10px;
+            background: #222;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            margin: 8px 0;
+        }
+        /* Portrait slot: fixed height matches the text block so the card does not grow */
+        .hero-portrait {
+            flex: 0 0 40px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .hero-portrait img {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            image-rendering: pixelated;
+            display: block;
+        }
+        .hero-card-body { flex: 1 1 auto; min-width: 0; }
         .hero-card h4 { margin: 0 0 6px 0; color: #ff9800; }
         .hero-card p { margin: 0; color: #aaa; font-size: 12px; }
         .nav-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
@@ -111,7 +140,7 @@
             text-align: center;
         }
 
-        /* Town HQ: letterboxed town art + % positioned tooltip hotspots */
+        /* Town: letterboxed town art + % positioned tooltip hotspots */
         #screen-town-hq {
             background: #000;
             overflow: hidden;
@@ -630,10 +659,10 @@
         </div>
     </div>
 
-    <!-- [2] TOWN HQ -->
+    <!-- [2] TOWN -->
     <div id="screen-town-hq" class="game-screen">
         <div class="town-top-bar">
-            <span class="town-top-title">TOWN HQ</span>
+            <span class="town-top-title">TOWN</span>
             <span class="town-top-gold">Gold: <span id="hq-gold">100</span>g</span>
         </div>
         <div id="town-stage-wrap">
@@ -673,7 +702,7 @@
                         </div>
                     </div>
                     <div class="nav-row">
-                        <button id="btn-tavern-return-hq" class="btn-primary">Return to Town HQ</button>
+                        <button id="btn-tavern-return-hq" class="btn-primary">Return to Town</button>
                     </div>
                 </div>
             </div>
@@ -815,7 +844,7 @@ REWARD: 100g</div>
             <p id="game-over-detail" style="text-align: center; color: #aaa; font-size: 15px; max-width: 640px; margin: 0 auto 12px;"></p>
             <p style="text-align: center; color: #ffff00; font-size: 18px;">Gold Earned: <span id="game-over-gold">0</span>g</p>
             <div class="nav-row">
-                <button id="btn-return-to-hq" class="btn-primary">Return to Town HQ</button>
+                <button id="btn-return-to-hq" class="btn-primary">Return to Town</button>
             </div>
         </div>
     </div>

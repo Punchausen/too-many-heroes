@@ -17,7 +17,7 @@ You must adhere 100% to the project specification at all times:
 - Peasant: 30 Base HP | 10 Melee | 0 Range
 - Barbarian: 100 Base HP | 40 Melee | 0 Range
 - Elf: 50 Base HP | 15 Melee | 25 Range
-- Mage: 40 Base HP | 10 Melee | 35 Range
+- Wizard: 40 Base HP | 10 Melee | 35 Range
 - Knight: 120 Base HP | 25 Melee | 0 Range
 
 ## 3. Movement & Initiative Order

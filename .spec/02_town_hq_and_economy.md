@@ -1,4 +1,4 @@
-# 02. TOWN HQ & ECONOMY SPECIFICATION
+# 02. TOWN & ECONOMY SPECIFICATION
 
 ## 2.1 Player State Schema (Server Ground Truth)
 The server tracks player session state using the following template:
@@ -33,7 +33,7 @@ The server tracks player session state using the following template:
 - Construction Cost: 50 Gold (Unlocks Tier 1 Tavern).
 - Recruitment Pools by Tier:
   - Tier 1: Peasants (20 Gold), Elves (35 Gold).
-  - Tier 2: Knights (60 Gold), Mages (80 Gold).
+  - Tier 2: Knights (60 Gold), Wizards (80 Gold).
   - Tier 3: Elite Champions (150 Gold).
 
 ## 2.3 Quest Selection Rules

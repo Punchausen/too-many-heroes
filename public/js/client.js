@@ -28,7 +28,7 @@ const LOCAL_HERO_TEMPLATES = {
     'Peasant':   { hp: 30,  melee: 10, range: 0 },
     'Barbarian': { hp: 100, melee: 40, range: 0 },
     'Elf':       { hp: 50,  melee: 15, range: 25 },
-    'Mage':      { hp: 40,  melee: 10, range: 35 },
+    'Wizard':    { hp: 40,  melee: 10, range: 35 },
     'Knight':    { hp: 120, melee: 25, range: 0 }
 };
 
@@ -314,6 +314,15 @@ function findHubParty(number) {
     return myParties.find(p => p.number === number) || null;
 }
 
+// Portrait files for hire/detail rows. Missing roles keep an empty slot so layout stays aligned.
+const HERO_PORTRAITS = {
+    Peasant: '/assets/characters/peasant_1.png',
+    Elf: '/assets/characters/elf_1.png',
+    Wizard: '/assets/characters/wizard_1.png',
+    Barbarian: '/assets/characters/barbarian_1.png',
+    Knight: '/assets/characters/knight_1.png'
+};
+
 function renderHeroCards(container, heroes) {
     if (!container) return;
     container.innerHTML = '';
@@ -328,7 +337,18 @@ function renderHeroCards(container, heroes) {
         } else {
             hpText = `${stats.hp} HP`;
         }
-        card.innerHTML = `<h4>${h.role.toUpperCase()}</h4><p>❤ ${hpText} | ${heroAttackLabel(stats)}</p>`;
+
+        const portraitSrc = HERO_PORTRAITS[h.role];
+        const portraitHtml = portraitSrc
+            ? `<img src="${portraitSrc}" alt="${h.role}">`
+            : '';
+
+        card.innerHTML =
+            `<div class="hero-portrait">${portraitHtml}</div>`
+            + `<div class="hero-card-body">`
+            + `<h4>${h.role.toUpperCase()}</h4>`
+            + `<p>❤ ${hpText} | ${heroAttackLabel(stats)}</p>`
+            + `</div>`;
         container.appendChild(card);
     });
 }
@@ -489,7 +509,7 @@ function applyStateSync(data) {
         if (serverRoom === 'TACTICAL_ARENA' || serverRoom === 'GAME_OVER' || serverRoom === 'LANDING') {
             switchScreen(serverRoom);
         } else if (serverRoom && serverRoom !== 'CASTLE' && serverRoom !== 'TOWN_HQ') {
-            // stay on briefing while still in castle hub flow; Town HQ means they navigated away
+            // stay on briefing while still in castle hub flow; Town means they navigated away
             if (serverRoom === 'TAVERN') switchScreen(serverRoom);
         } else if (serverRoom === 'TOWN_HQ') {
             switchScreen(serverRoom);
