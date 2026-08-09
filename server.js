@@ -65,6 +65,8 @@ let arenaPhase = 'IDLE';                // IDLE | DEPLOYMENT | COMBAT
 let deployReady = { p1: false, p2: false };
 // Locked orders for the current round — one entry per faction once they submit-turn.
 let pendingMoves = { p1: null, p2: null };
+// Who clicked Lock first this round — tie-break when two parties contest a tile with the same order.
+let firstLockFaction = null;
 // Spell books sitting on the ground after a carrier was knocked out.
 // ownerFaction = which wizard tower the book originally came from.
 let groundBooks = [];
@@ -77,6 +79,8 @@ const INITIATIVE_BANDS = ['Seek', 'Advance', 'March'];
 const ORDER_CAPACITIES = { Seek: 1, Advance: 2, March: 3 };
 const GRID_MAX_X = 10;
 const GRID_MAX_Y = 9;
+// Must match public/js/client.js FOG_VISION_RANGE — Manhattan steps from living friendly parties.
+const FOG_VISION_RANGE = 2;
 const MAX_FIELDED_PARTIES = 4;
 const MAX_ROUNDS = 10;              // "10 days" — then check held enemy books / draw
 const VICTORY_GOLD = 100;           // Full win (deliver book or wipe enemies)
@@ -245,12 +249,20 @@ function initPlayerState() {
 // ==================== HELPERS: STATE SYNC ====================
 
 function publicArenaParties() {
+    // Deep-clone members so timeline snapshots keep the HP at that moment.
+    // (If we reused the same member objects, every wave would show final HP after combat.)
     return arenaParties.map(ap => ({
         uid: ap.uid,
         faction: ap.faction,
         number: ap.number,
         name: ap.name,
-        members: ap.members,
+        members: (ap.members || []).map(m => ({
+            role: m.role,
+            hp: m.hp,
+            baseHp: m.baseHp,
+            melee: m.melee,
+            range: m.range
+        })),
         x: ap.x,
         y: ap.y,
         order: ap.order,
@@ -336,6 +348,7 @@ function resetArenaState() {
     currentRound = 1;
     arenaParties = [];
     pendingMoves = { p1: null, p2: null };
+    firstLockFaction = null;
     arenaPhase = 'IDLE';
     deployReady = { p1: false, p2: false };
     groundBooks = [];
@@ -396,6 +409,24 @@ function manhattan(a, b) {
 
 function partyIsAlive(ap) {
     return ap.members.some(u => u.hp > 0);
+}
+
+// Can this faction see tile (x,y)? Same rule as the client's fog of war.
+function factionCanSeeTile(faction, x, y) {
+    return arenaParties.some(ap =>
+        ap.faction === faction
+        && partyIsAlive(ap)
+        && typeof ap.x === 'number'
+        && typeof ap.y === 'number'
+        && (Math.abs(ap.x - x) + Math.abs(ap.y - y)) <= FOG_VISION_RANGE
+    );
+}
+
+// You may only deal combat damage to parties your side can see (no hitting back into fog).
+function attackerCanSeeTarget(attacker, target) {
+    if (!attacker || !target) return false;
+    if (typeof target.x !== 'number' || typeof target.y !== 'number') return false;
+    return factionCanSeeTile(attacker.faction, target.x, target.y);
 }
 
 function findBuildingAnchors() {
@@ -595,6 +626,7 @@ function startArenaMatch() {
     deployReady = { p1: false, p2: false };
     currentRound = 1;
     pendingMoves = { p1: null, p2: null };
+    firstLockFaction = null;
     groundBooks = [];
 
     io.emit('ROOM_TRANSITION', { newState: 'TACTICAL_ARENA' });
@@ -613,6 +645,7 @@ function tryBeginCombatFromDeployment() {
         arenaPhase = 'COMBAT';
         currentRound = 1;
         pendingMoves = { p1: null, p2: null };
+        firstLockFaction = null;
         emitStateSyncAll();
     }
 }
@@ -676,22 +709,304 @@ function getPartyMoveSubmission(ap) {
     };
 }
 
-// Destination-tile priority for contested ends: March > Advance > Seek
+// Destination-tile priority for contested tiles: March > Advance > Seek
 // (the "faster travel" order wins the square — opposite of combat initiative rank).
 function movementPriority(order) {
     return INITIATIVE_ORDER[order] || 0;
 }
 
-function planEndTile(plan) {
-    if (plan.path.length > 0) return plan.path[plan.path.length - 1];
-    return plan.start;
+// Sort so the winner is first: higher March priority, then who locked orders first.
+function compareStepMovePriority(a, b) {
+    const diff = movementPriority(b.order) - movementPriority(a.order);
+    if (diff !== 0) return diff;
+    if (firstLockFaction) {
+        if (a.ap.faction === firstLockFaction && b.ap.faction !== firstLockFaction) return -1;
+        if (b.ap.faction === firstLockFaction && a.ap.faction !== firstLockFaction) return 1;
+    }
+    return String(a.ap.uid).localeCompare(String(b.ap.uid));
 }
 
-// Resolve ALL movement for the round at once (from start-of-round positions).
-// If two parties aim for the same tile, March beats Advance beats Seek.
-// The loser shortens its path by one tile at a time (stops on the previous step),
-// instead of cancelling the whole move.
-function resolveAllMovement(roundLog) {
+function meleePairKey(a, b) {
+    return a.uid < b.uid ? `${a.uid}|${b.uid}` : `${b.uid}|${a.uid}`;
+}
+
+// Animation / sequencing weight (higher resolves first). Opposite of initiative rank numbers.
+const ORDER_COMBAT_SCORE = { Seek: 3, Advance: 2, March: 1 };
+
+function combatPairScore(a, b) {
+    return (ORDER_COMBAT_SCORE[a.order] || 0) + (ORDER_COMBAT_SCORE[b.order] || 0);
+}
+
+// Highest score first; identical scores get a random order (server picks so both clients match).
+function sortCombatPairsByScore(pairs) {
+    pairs.forEach(p => { p._rand = Math.random(); });
+    pairs.sort((a, b) => {
+        const diff = b.score - a.score;
+        if (diff !== 0) return diff;
+        return a._rand - b._rand;
+    });
+}
+
+// Apply one hit, log it, drop books if someone was KO'd. Returns a float + board snapshot for the client.
+// If the attacker cannot see the target (fog), no damage — float is null.
+function applyCombatHitForTimeline(attacker, target, damage, kind, roundLog) {
+    if (!attackerCanSeeTarget(attacker, target)) {
+        roundLog += ` -> ${attacker.name} cannot ${kind}-attack ${target.name} (target hidden in fog).<br>`;
+        return { float: null, roundLog };
+    }
+    const label = `${attacker.name} ${kind} vs ${target.name}`;
+    roundLog += `[${label}] ${damage} dmg<br>`;
+    applySpilloverDamage(target.members, damage, (str) => { roundLog += str; }, label);
+    roundLog = dropBooksFromKnockouts(roundLog);
+    return {
+        float: {
+            targetUid: target.uid,
+            damage,
+            attackerFaction: attacker.faction,
+            kind
+        },
+        arenaParties: publicArenaParties(),
+        groundBooks: snapshotGroundBooks(),
+        roundLog
+    };
+}
+
+function snapshotGroundBooks() {
+    return groundBooks.map(b => ({ x: b.x, y: b.y, ownerFaction: b.ownerFaction }));
+}
+
+// Cancel this step and every later step for a plan (party stops where it is).
+function truncatePlanFromStep(plan, stepIndex) {
+    plan.path = plan.path.slice(0, stepIndex);
+}
+
+// Temporary snippet — will be applied into server.js via patch script.
+// After one move step: collect ranged pair-fights, then melee pair-fights.
+// Sequence: all ranged (by Seek=3/Advance=2/March=1 pair score), then all melee (same scoring).
+// Returns combats[] for the client timeline (0.5s pause per fight, 0.5s per damage wave).
+function resolveStepCombat(meleePairsDone, rangedDone, roundLog) {
+    const combats = [];
+
+    // --- Pre-compute ranged hits (each party shoots at most once this turn) ---
+    const rangedHitsByPair = new Map();
+    INITIATIVE_BANDS.forEach(bandName => {
+        const attackers = arenaParties.filter(ap => ap.order === bandName && partyIsAlive(ap));
+        attackers.forEach(attacker => {
+            if (rangedDone.has(attacker.uid)) return;
+            const rangedPower = getRangedPower(attacker.members, attacker.order);
+            if (rangedPower <= 0) return;
+            // Only shoot targets this faction can see (no firing into your own fog).
+            const rangedTargets = arenaParties.filter(e =>
+                e.faction !== attacker.faction
+                && partyIsAlive(e)
+                && manhattan(attacker, e) === 2
+                && attackerCanSeeTarget(attacker, e)
+            );
+            if (!rangedTargets.length) return;
+
+            rangedDone.add(attacker.uid);
+            const shares = splitDamageEvenly(rangedPower, rangedTargets.length);
+            rangedTargets.forEach((target, idx) => {
+                const share = shares[idx];
+                const modified = applyRangedDefenceModifier(share, target);
+                const coverNote = rangedDefenceLabel(target);
+                if (coverNote && share > 0) {
+                    roundLog += ` -> ${attacker.name} ranged vs ${target.name}: ${share} -> ${modified} after ${coverNote}<br>`;
+                }
+                const key = meleePairKey(attacker, target);
+                if (!rangedHitsByPair.has(key)) {
+                    rangedHitsByPair.set(key, {
+                        key,
+                        score: combatPairScore(attacker, target),
+                        hits: []
+                    });
+                }
+                rangedHitsByPair.get(key).hits.push({
+                    attacker,
+                    target,
+                    damage: modified,
+                    init: INITIATIVE_ORDER[attacker.order] || 2
+                });
+            });
+        });
+    });
+
+    const rangedPairs = Array.from(rangedHitsByPair.values());
+    sortCombatPairsByScore(rangedPairs);
+
+    rangedPairs.forEach(pair => {
+        pair.hits.sort((h1, h2) => {
+            if (h1.init !== h2.init) return h1.init - h2.init;
+            return String(h1.attacker.uid).localeCompare(String(h2.attacker.uid));
+        });
+
+        const waves = [];
+        let i = 0;
+        while (i < pair.hits.length) {
+            const batch = [pair.hits[i]];
+            while (i + 1 < pair.hits.length && pair.hits[i + 1].init === pair.hits[i].init) {
+                i += 1;
+                batch.push(pair.hits[i]);
+            }
+            i += 1;
+
+            // Same-initiative shots in one wave: apply all, then one shared snapshot.
+            const ready = batch.filter(hit =>
+                partyIsAlive(hit.attacker)
+                && partyIsAlive(hit.target)
+                && attackerCanSeeTarget(hit.attacker, hit.target)
+            );
+            const floats = [];
+            ready.forEach(hit => {
+                const label = `${hit.attacker.name} ranged vs ${hit.target.name}`;
+                roundLog += `[${label}] ${hit.damage} dmg<br>`;
+                applySpilloverDamage(hit.target.members, hit.damage, (str) => { roundLog += str; }, label);
+                floats.push({
+                    targetUid: hit.target.uid,
+                    damage: hit.damage,
+                    attackerFaction: hit.attacker.faction,
+                    kind: 'ranged'
+                });
+            });
+            if (!floats.length) continue;
+            roundLog = dropBooksFromKnockouts(roundLog);
+            waves.push({
+                floats,
+                arenaParties: publicArenaParties(),
+                groundBooks: snapshotGroundBooks()
+            });
+        }
+        if (waves.length) {
+            combats.push({ kind: 'ranged', score: pair.score, waves });
+        }
+    });
+
+    // --- Melee pairs (each pair once per turn) ---
+    const pendingPairs = [];
+    const living = arenaParties.filter(ap => partyIsAlive(ap));
+    for (let li = 0; li < living.length; li++) {
+        for (let lj = li + 1; lj < living.length; lj++) {
+            const a = living[li];
+            const b = living[lj];
+            if (a.faction === b.faction) continue;
+            if (manhattan(a, b) !== 1) continue;
+            const key = meleePairKey(a, b);
+            if (meleePairsDone.has(key)) continue;
+            pendingPairs.push({
+                a,
+                b,
+                key,
+                score: combatPairScore(a, b)
+            });
+        }
+    }
+
+    sortCombatPairsByScore(pendingPairs);
+
+    const meleeShareByEdge = new Map();
+    living.forEach(attacker => {
+        const targets = pendingPairs
+            .filter(p => p.a.uid === attacker.uid || p.b.uid === attacker.uid)
+            .map(p => (p.a.uid === attacker.uid ? p.b : p.a))
+            .filter(t => partyIsAlive(t));
+        if (!targets.length) return;
+        const shares = splitDamageEvenly(getMeleePower(attacker.members), targets.length);
+        targets.forEach((t, idx) => {
+            meleeShareByEdge.set(`${attacker.uid}>${t.uid}`, shares[idx]);
+        });
+    });
+
+    function meleeShare(attacker, target) {
+        return meleeShareByEdge.get(`${attacker.uid}>${target.uid}`) || 0;
+    }
+
+    pendingPairs.forEach(pair => {
+        if (meleePairsDone.has(pair.key)) return;
+        if (!partyIsAlive(pair.a) || !partyIsAlive(pair.b)) return;
+        if (manhattan(pair.a, pair.b) !== 1) return;
+
+        meleePairsDone.add(pair.key);
+        const waves = [];
+        const initA = INITIATIVE_ORDER[pair.a.order] || 2;
+        const initB = INITIATIVE_ORDER[pair.b.order] || 2;
+
+        if (initA === initB) {
+            // True simultaneous: both strikes use pre-strike power, then one float wave.
+            // Each side only hits if they can see the other (fog blocks return damage).
+            const floats = [];
+            if (attackerCanSeeTarget(pair.a, pair.b)) {
+                const dmgToB = meleeShare(pair.a, pair.b);
+                const labelAB = `${pair.a.name} melee vs ${pair.b.name}`;
+                roundLog += `[${labelAB}] ${dmgToB} dmg<br>`;
+                applySpilloverDamage(pair.b.members, dmgToB, (str) => { roundLog += str; }, labelAB);
+                floats.push({
+                    targetUid: pair.b.uid, damage: dmgToB,
+                    attackerFaction: pair.a.faction, kind: 'melee'
+                });
+            } else {
+                roundLog += ` -> ${pair.a.name} cannot melee-attack ${pair.b.name} (target hidden in fog).<br>`;
+            }
+            if (attackerCanSeeTarget(pair.b, pair.a)) {
+                const dmgToA = meleeShare(pair.b, pair.a);
+                const labelBA = `${pair.b.name} melee vs ${pair.a.name}`;
+                roundLog += `[${labelBA}] ${dmgToA} dmg<br>`;
+                applySpilloverDamage(pair.a.members, dmgToA, (str) => { roundLog += str; }, labelBA);
+                floats.push({
+                    targetUid: pair.a.uid, damage: dmgToA,
+                    attackerFaction: pair.b.faction, kind: 'melee'
+                });
+            } else {
+                roundLog += ` -> ${pair.b.name} cannot melee-attack ${pair.a.name} (target hidden in fog).<br>`;
+            }
+            if (floats.length) {
+                roundLog = dropBooksFromKnockouts(roundLog);
+                waves.push({
+                    floats,
+                    arenaParties: publicArenaParties(),
+                    groundBooks: snapshotGroundBooks()
+                });
+            }
+        } else {
+            const first = initA < initB ? pair.a : pair.b;
+            const second = initA < initB ? pair.b : pair.a;
+            const dmg = Math.floor(meleeShare(first, second) * 1.2);
+            const hit1 = applyCombatHitForTimeline(first, second, dmg, 'melee', roundLog);
+            roundLog = hit1.roundLog;
+            if (hit1.float) {
+                roundLog += ` -> (+20% surprise on ${first.name}'s strike)<br>`;
+                waves.push({
+                    floats: [hit1.float],
+                    arenaParties: hit1.arenaParties,
+                    groundBooks: hit1.groundBooks
+                });
+            }
+
+            // Counter only if still alive/adjacent AND the counter-attacker can see the foe.
+            if (partyIsAlive(second) && partyIsAlive(first) && manhattan(first, second) === 1) {
+                const counter = getMeleePower(second.members);
+                const hit2 = applyCombatHitForTimeline(second, first, counter, 'melee', roundLog);
+                roundLog = hit2.roundLog;
+                if (hit2.float) {
+                    waves.push({
+                        floats: [hit2.float],
+                        arenaParties: hit2.arenaParties,
+                        groundBooks: hit2.groundBooks
+                    });
+                }
+            }
+        }
+
+        if (waves.length) {
+            combats.push({ kind: 'melee', score: pair.score, waves });
+        }
+    });
+
+    return { hasCombat: combats.length > 0, roundLog, combats };
+}
+
+// Step-by-step movement: everyone advances one square together, then combat checks,
+// then the next square. Builds a timeline the client animates (0.5s slides, 1s gaps).
+function resolveSteppedMovementAndCombat(roundLog) {
     const snapshot = arenaParties.map(ap => ({
         uid: ap.uid,
         faction: ap.faction,
@@ -711,71 +1026,139 @@ function resolveAllMovement(roundLog) {
         };
     });
 
-    roundLog += `<br>🚶 Movement resolution<br>`;
+    const timeline = [];
+    const meleePairsDone = new Set();
+    const rangedDone = new Set();
+    const maxSteps = plans.reduce((m, p) => Math.max(m, p.path.length), 0);
 
-    // Keep truncating losers until every end tile is unique.
-    let safety = 0;
-    let changed = true;
-    while (changed && safety < 64) {
-        changed = false;
-        safety += 1;
+    roundLog += `<br>🚶 Stepped movement (${maxSteps} step${maxSteps === 1 ? '' : 's'})<br>`;
 
-        const byEnd = new Map();
-        plans.forEach(plan => {
-            const end = planEndTile(plan);
-            const key = `${end.x},${end.y}`;
-            if (!byEnd.has(key)) byEnd.set(key, []);
-            byEnd.get(key).push(plan);
-        });
+    // No one moved — still allow a combat check (parties already in range).
+    const stepCount = Math.max(maxSteps, 1);
+    const movementSteps = maxSteps;
 
-        byEnd.forEach((group) => {
-            if (group.length <= 1) return;
+    for (let step = 0; step < stepCount; step++) {
+        const moves = [];
+        const isMoveStep = step < movementSteps;
 
-            // Highest movementPriority wins the tile (March=3 > Advance=2 > Seek=1).
-            group.sort((a, b) => {
-                const diff = movementPriority(b.order) - movementPriority(a.order);
-                if (diff !== 0) return diff;
-                return String(a.ap.uid).localeCompare(String(b.ap.uid));
-            });
+        if (isMoveStep) {
+            // Intended one-tile moves this step (alive parties that still have path left).
+            let intended = plans
+                .filter(plan => partyIsAlive(plan.ap) && step < plan.path.length)
+                .map(plan => ({
+                    plan,
+                    from: { x: plan.ap.x, y: plan.ap.y },
+                    to: { x: plan.path[step].x, y: plan.path[step].y }
+                }));
 
-            for (let i = 1; i < group.length; i++) {
-                const loser = group[i];
-                if (loser.path.length === 0) {
-                    // Stationary party already on this tile — the "winner" must give way instead.
-                    const winner = group[0];
-                    if (winner.path.length > 0) {
-                        const stolen = winner.path[winner.path.length - 1];
-                        winner.path = winner.path.slice(0, -1);
+            // Resolve blocked / contested destinations until stable.
+            let safety = 0;
+            let changed = true;
+            while (changed && safety < 64) {
+                changed = false;
+                safety += 1;
+
+                const leaving = new Set(intended.map(m => m.plan.ap.uid));
+
+                // Cannot enter a tile still held by someone who is not leaving this step
+                // (friend or foe). Drawing a path through friends is allowed; resolve stops
+                // you if they stay put. Same-step vacate (they leave as you enter) is OK.
+                intended = intended.filter(m => {
+                    const holder = arenaParties.find(ap =>
+                        partyIsAlive(ap)
+                        && ap.uid !== m.plan.ap.uid
+                        && ap.x === m.to.x
+                        && ap.y === m.to.y
+                    );
+                    if (holder && !leaving.has(holder.uid)) {
+                        roundLog += ` -> ${m.plan.ap.name} blocked by ${holder.name} at (${m.to.x},${m.to.y}); stops.<br>`;
+                        truncatePlanFromStep(m.plan, step);
                         changed = true;
-                        roundLog += ` -> ${winner.ap.name} yields (${stolen.x},${stolen.y}) — occupied by holding ${loser.ap.name}; steps back.<br>`;
+                        return false;
                     }
-                    continue;
-                }
-                const stolen = loser.path[loser.path.length - 1];
-                loser.path = loser.path.slice(0, -1);
-                changed = true;
-                const next = planEndTile(loser);
-                roundLog += ` -> ${loser.ap.name} loses tile (${stolen.x},${stolen.y}) to faster order; stops at (${next.x},${next.y}).<br>`;
+                    return true;
+                });
+
+                // Contest: March > Advance > Seek, then firstLockFaction.
+                const byEnd = new Map();
+                intended.forEach(m => {
+                    const key = `${m.to.x},${m.to.y}`;
+                    if (!byEnd.has(key)) byEnd.set(key, []);
+                    byEnd.get(key).push(m);
+                });
+
+                const winners = [];
+                byEnd.forEach((group) => {
+                    if (group.length === 1) {
+                        winners.push(group[0]);
+                        return;
+                    }
+                    group.sort((a, b) => compareStepMovePriority(a.plan, b.plan));
+                    winners.push(group[0]);
+                    for (let i = 1; i < group.length; i++) {
+                        const loser = group[i];
+                        roundLog += ` -> ${loser.plan.ap.name} loses tile (${loser.to.x},${loser.to.y}) to ${group[0].plan.ap.name}; stops at (${loser.from.x},${loser.from.y}).<br>`;
+                        truncatePlanFromStep(loser.plan, step);
+                        changed = true;
+                    }
+                });
+                intended = winners;
             }
-        });
+
+            // Apply surviving moves + pick up books while stepping through.
+            intended.forEach(m => {
+                m.plan.ap.x = m.to.x;
+                m.plan.ap.y = m.to.y;
+                moves.push({
+                    uid: m.plan.ap.uid,
+                    from: m.from,
+                    to: { x: m.to.x, y: m.to.y }
+                });
+                roundLog += ` -> ${m.plan.ap.name} steps to (${m.to.x},${m.to.y}).<br>`;
+                roundLog = tryPickupGroundBook(m.plan.ap, roundLog);
+            });
+        }
+
+        // Combat after each move step; also once when nobody moved (step 0 only).
+        let combats = [];
+        if (isMoveStep || movementSteps === 0) {
+            roundLog += `<br>⚔ After step ${isMoveStep ? step + 1 : 0}<br>`;
+            const combatResult = resolveStepCombat(meleePairsDone, rangedDone, roundLog);
+            combats = combatResult.combats || [];
+            roundLog = combatResult.roundLog;
+            if (!combats.length) roundLog += ' -> No engagements.<br>';
+        }
+
+        // Hold-only round: one combat timeline frame, no moves.
+        if (!isMoveStep && movementSteps === 0) {
+            timeline.push({
+                moves: [],
+                combats,
+                hasCombat: combats.length > 0,
+                arenaParties: publicArenaParties(),
+                groundBooks: snapshotGroundBooks()
+            });
+            break;
+        }
+
+        if (isMoveStep) {
+            timeline.push({
+                moves,
+                combats,
+                hasCombat: combats.length > 0,
+                arenaParties: publicArenaParties(),
+                groundBooks: snapshotGroundBooks()
+            });
+        }
     }
 
     plans.forEach(plan => {
         if (plan.path.length === 0) {
-            roundLog += ` -> ${plan.ap.name} holds at (${plan.ap.x},${plan.ap.y}).<br>`;
-            return;
+            roundLog += ` -> ${plan.ap.name} held at (${plan.start.x},${plan.start.y}).<br>`;
         }
-        // Walk each step so books can be picked up while passing through a tile.
-        plan.path.forEach(cell => {
-            plan.ap.x = cell.x;
-            plan.ap.y = cell.y;
-            roundLog = tryPickupGroundBook(plan.ap, roundLog);
-        });
-        const end = planEndTile(plan);
-        roundLog += ` -> ${plan.ap.name} [${plan.order}] moves to (${end.x},${end.y}).<br>`;
     });
 
-    return roundLog;
+    return { roundLog, timeline };
 }
 
 // Orthogonal adjacency only (up/down/left/right — no diagonals).
@@ -998,33 +1381,37 @@ function resolveRoundSimulation() {
 
     applyOrdersFromPending();
 
-    // 1) Movement (+ book pickups while passing through)
-    roundLog = resolveAllMovement(roundLog);
+    // Freeze pre-resolution board for the client (so KO'd heroes stay visible until their float).
+    const partiesAtStart = publicArenaParties();
 
-    // 2) Steal / return interactions at towers
+    // 1) Stepped movement + per-step combat (builds client animation timeline)
+    const stepped = resolveSteppedMovementAndCombat(roundLog);
+    roundLog = stepped.roundLog;
+    const timeline = stepped.timeline;
+
+    // 2) Steal / return at towers only after all movement has finished
     const buildingResult = resolveBuildingInteractions(roundLog);
     roundLog = buildingResult.roundLog;
     const bookWins = buildingResult.bookWins;
 
-    // 3) Combat
-    INITIATIVE_BANDS.forEach(band => {
-        roundLog = resolveCombatBand(band, roundLog);
-    });
-
-    // 4) Drop books from parties knocked out this round
+    // Final KO drops (in case tower phase somehow mattered — usually already handled per step)
     roundLog = dropBooksFromKnockouts(roundLog);
 
     currentRound++;
     pendingMoves = { p1: null, p2: null };
+    firstLockFaction = null;
 
     const p1Alive = factionHasLivingParties('p1');
     const p2Alive = factionHasLivingParties('p2');
 
     io.emit('resolve-round', {
+        partiesAtStart,
         arenaParties: publicArenaParties(),
         groundBooks: groundBooks.map(b => ({ x: b.x, y: b.y, ownerFaction: b.ownerFaction })),
         nextRound: currentRound,
-        log: roundLog
+        log: roundLog,
+        // Client plays moves as 0.5s slides; combat pauses/floats are 1s each.
+        timeline
     });
 
     // --- End-of-day win / draw checks (after full resolution) ---
@@ -1305,6 +1692,11 @@ io.on('connection', (socket) => {
                 path: Array.isArray(ord.path) ? ord.path : []
             };
         });
+
+        // First Lock click this round wins same-order tile contests.
+        if (!pendingMoves.p1 && !pendingMoves.p2) {
+            firstLockFaction = data.faction;
+        }
 
         pendingMoves[data.faction] = { byNumber };
 

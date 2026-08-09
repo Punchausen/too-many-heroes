@@ -82,6 +82,19 @@ let localPlans = {};
 let isWaitingForCombatResolution = false;
 let matchActive = true;
 
+// Round resolution playback (server still owns outcomes; we only animate them).
+const ROUND_MOVE_MS = 500;        // slide duration for one square
+const ROUND_STEP_GAP_MS = 1000;   // pause between movement steps (no combat)
+const COMBAT_PAUSE_MS = 1000;     // pause before each sequenced fight
+const COMBAT_FLOAT_MS = 1000;     // damage number rise + fade
+let isPlayingRoundAnimation = false;
+// While animating: fractional tile positions { [uid]: { x, y } }. Null = use server ints.
+let animPosByUid = null;
+// Floating damage numbers currently on screen: { targetUid, damage, attackerFaction, kind, startTime }
+let activeCombatFloats = [];
+// If GAME_OVER arrives mid-animation, show it after the slides finish.
+let pendingGameOverSummary = null;
+
 // Party detail screen remembers where "Back" should return (TAVERN or CASTLE).
 let partyDetailReturnTo = 'TAVERN';
 let viewingPartyNumber = null;
@@ -717,15 +730,20 @@ function applyStateSync(data) {
     }
 
     if (data.arena) {
-        if (data.arena.currentRound) currentRound = data.arena.currentRound;
-        if (data.arena.phase) arenaPhase = data.arena.phase;
-        if (data.arena.parties) {
-            updatePartyFacingFromPositions(data.arena.parties);
-            arenaParties = data.arena.parties;
-            // Regular sync: keep paths the player is still drawing unless phase just changed.
-            syncLocalPlansFromArena(false);
+        // During move playback, ignore position snaps from STATE_SYNC (final state is applied after).
+        if (!isPlayingRoundAnimation) {
+            if (data.arena.currentRound) currentRound = data.arena.currentRound;
+            if (data.arena.phase) arenaPhase = data.arena.phase;
+            if (data.arena.parties) {
+                updatePartyFacingFromPositions(data.arena.parties);
+                arenaParties = data.arena.parties;
+                // Regular sync: keep paths the player is still drawing unless phase just changed.
+                syncLocalPlansFromArena(false);
+            }
+            if (data.arena.groundBooks) groundBooks = data.arena.groundBooks;
+        } else if (data.arena.phase) {
+            arenaPhase = data.arena.phase;
         }
-        if (data.arena.groundBooks) groundBooks = data.arena.groundBooks;
         if (data.arena.maxRounds) maxRounds = data.arena.maxRounds;
         if (data.arena.deployment) {
             deploymentStatus.p1 = data.arena.deployment.p1 || deploymentStatus.p1;
@@ -1086,6 +1104,280 @@ function onLockOrReadyClick() {
 
 // ==================== 6. ARENA CANVAS (map only) ====================
 
+function sleepMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Tile used for drawing (fractional while sliding between squares).
+function getPartyDrawTile(ap) {
+    if (animPosByUid && animPosByUid[ap.uid]) return animPosByUid[ap.uid];
+    return { x: ap.x, y: ap.y };
+}
+
+function setFacingFromStep(uid, from, to) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+        if (dx > 0) partyLastMoveDir[uid] = 'right';
+        else if (dx < 0) partyLastMoveDir[uid] = 'left';
+    } else {
+        if (dy > 0) partyLastMoveDir[uid] = 'down';
+        else if (dy < 0) partyLastMoveDir[uid] = 'up';
+    }
+}
+
+// Smooth slide for every party that moves this step (all at once).
+function animateTimelineMoves(moves) {
+    return new Promise(resolve => {
+        if (!moves || !moves.length) {
+            resolve();
+            return;
+        }
+        if (!animPosByUid) animPosByUid = {};
+        moves.forEach(m => {
+            setFacingFromStep(m.uid, m.from, m.to);
+            animPosByUid[m.uid] = { x: m.from.x, y: m.from.y };
+            partyLastPos[m.uid] = { x: m.to.x, y: m.to.y };
+        });
+        const start = performance.now();
+        function frame(now) {
+            const t = Math.min(1, (now - start) / ROUND_MOVE_MS);
+            moves.forEach(m => {
+                animPosByUid[m.uid] = {
+                    x: m.from.x + (m.to.x - m.from.x) * t,
+                    y: m.from.y + (m.to.y - m.from.y) * t
+                };
+            });
+            if (t < 1) {
+                requestAnimationFrame(frame);
+            } else {
+                moves.forEach(m => {
+                    animPosByUid[m.uid] = { x: m.to.x, y: m.to.y };
+                });
+                resolve();
+            }
+        }
+        requestAnimationFrame(frame);
+    });
+}
+
+function applyTimelinePartySnapshot(parties, books) {
+    if (parties) {
+        arenaParties = parties;
+        arenaParties.forEach(ap => {
+            if (!partyIsAlive(ap)) {
+                if (animPosByUid) delete animPosByUid[ap.uid];
+                return;
+            }
+            if (typeof ap.x === 'number' && typeof ap.y === 'number') {
+                if (animPosByUid) animPosByUid[ap.uid] = { x: ap.x, y: ap.y };
+                partyLastPos[ap.uid] = { x: ap.x, y: ap.y };
+            }
+        });
+    }
+    if (books) groundBooks = books;
+    renderSyncedUI();
+}
+
+function spawnCombatFloats(floats) {
+    const now = performance.now();
+    (floats || []).forEach(f => {
+        // Pin to the target's tile at spawn so the number can't drift to a neighbour tile.
+        const ap = arenaParties.find(p => p.uid === f.targetUid);
+        const tile = ap ? getPartyDrawTile(ap) : null;
+        const tileX = tile && typeof tile.x === 'number' ? Math.round(tile.x) : null;
+        const tileY = tile && typeof tile.y === 'number' ? Math.round(tile.y) : null;
+        activeCombatFloats.push({
+            targetUid: f.targetUid,
+            damage: f.damage,
+            attackerFaction: f.attackerFaction,
+            kind: f.kind || 'melee',
+            startTime: now,
+            tileX,
+            tileY
+        });
+    });
+}
+
+// Simple canvas icons next to the damage number (bow = ranged, swords = melee).
+function drawCombatKindIcon(kind, x, y, color, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    if (kind === 'ranged') {
+        // Bow arc + arrow
+        ctx.beginPath();
+        ctx.arc(x, y, 7, -Math.PI * 0.7, Math.PI * 0.7, false);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - 8, y);
+        ctx.lineTo(x + 8, y);
+        ctx.moveTo(x + 5, y - 3);
+        ctx.lineTo(x + 8, y);
+        ctx.lineTo(x + 5, y + 3);
+        ctx.stroke();
+    } else {
+        // Two crossed strokes = swords
+        ctx.beginPath();
+        ctx.moveTo(x - 7, y + 6);
+        ctx.lineTo(x + 7, y - 6);
+        ctx.moveTo(x + 7, y + 6);
+        ctx.lineTo(x - 7, y - 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x - 7, y + 6, 2, 0, Math.PI * 2);
+        ctx.arc(x + 7, y + 6, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+function drawCombatFloats() {
+    if (!activeCombatFloats.length) return;
+    const now = performance.now();
+    const risePx = ARENA_GRID.cellSize * 0.25;
+    // Start ~10% of a tile below the top edge (10px at native 100px tiles).
+    const startInsetY = ARENA_GRID.cellSize * 0.10;
+    activeCombatFloats = activeCombatFloats.filter(f => (now - f.startTime) < COMBAT_FLOAT_MS);
+
+    activeCombatFloats.forEach(f => {
+        let tileX = f.tileX;
+        let tileY = f.tileY;
+        if (typeof tileX !== 'number' || typeof tileY !== 'number') {
+            const ap = arenaParties.find(p => p.uid === f.targetUid);
+            if (!ap || typeof ap.x !== 'number') return;
+            const tile = getPartyDrawTile(ap);
+            tileX = Math.round(tile.x);
+            tileY = Math.round(tile.y);
+        }
+        const t = Math.min(1, (now - f.startTime) / COMBAT_FLOAT_MS);
+        const alpha = 1 - t;
+        const color = getTeamColor(f.attackerFaction);
+        const cx = ARENA_GRID.offsetX + (tileX * ARENA_GRID.cellSize) + ARENA_GRID.cellSize / 2;
+        const cy = ARENA_GRID.offsetY + (tileY * ARENA_GRID.cellSize) + startInsetY - (risePx * t);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = 'bold 18px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillStyle = color;
+        const label = String(f.damage);
+        ctx.strokeText(label, cx - 10, cy);
+        ctx.fillText(label, cx - 10, cy);
+        const textW = ctx.measureText(label).width;
+        drawCombatKindIcon(f.kind, cx - 10 + textW / 2 + 12, cy, color, alpha);
+        ctx.restore();
+    });
+}
+
+// Play one step's fights: pause → float wave(s) → next fight. HP updates when a float appears.
+async function playStepCombats(combats) {
+    if (!combats || !combats.length) return;
+    for (let c = 0; c < combats.length; c++) {
+        const combat = combats[c];
+        await sleepMs(COMBAT_PAUSE_MS);
+        const waves = combat.waves || [];
+        for (let w = 0; w < waves.length; w++) {
+            const wave = waves[w];
+            spawnCombatFloats(wave.floats || []);
+            applyTimelinePartySnapshot(wave.arenaParties, wave.groundBooks);
+            await sleepMs(COMBAT_FLOAT_MS);
+        }
+    }
+    activeCombatFloats = [];
+}
+
+// Play server timeline: 0.5s slides, sequenced combat floats, 1s gap before the next move.
+async function playResolveTimeline(timeline) {
+    if (!animPosByUid) animPosByUid = {};
+    activeCombatFloats = [];
+    arenaParties.forEach(ap => {
+        if (typeof ap.x === 'number' && typeof ap.y === 'number') {
+            animPosByUid[ap.uid] = { x: ap.x, y: ap.y };
+        }
+    });
+
+    for (let i = 0; i < timeline.length; i++) {
+        const step = timeline[i];
+        await animateTimelineMoves(step.moves || []);
+
+        // Land on post-move positions first (HP still pre-combat until floats appear).
+        (step.moves || []).forEach(m => {
+            animPosByUid[m.uid] = { x: m.to.x, y: m.to.y };
+            const ap = arenaParties.find(p => p.uid === m.uid);
+            if (ap) {
+                ap.x = m.to.x;
+                ap.y = m.to.y;
+            }
+            partyLastPos[m.uid] = { x: m.to.x, y: m.to.y };
+        });
+
+        await playStepCombats(step.combats || []);
+
+        // Final board state for this step (covers hold-only / no-combat steps too).
+        applyTimelinePartySnapshot(step.arenaParties, step.groundBooks);
+
+        const isLast = i === timeline.length - 1;
+        if (!isLast) {
+            await sleepMs(ROUND_STEP_GAP_MS);
+        }
+    }
+    activeCombatFloats = [];
+}
+
+function finishRoundAnimation(data) {
+    const nextParties = data.arenaParties || arenaParties;
+    updatePartyFacingFromPositions(nextParties);
+    arenaParties = nextParties;
+    if (data.groundBooks) groundBooks = data.groundBooks;
+    if (data.nextRound) currentRound = data.nextRound;
+
+    getMyLivingArenaParties().forEach(ap => {
+        localPlans[ap.number] = {
+            order: ap.order || 'Advance',
+            path: []
+        };
+    });
+
+    animPosByUid = null;
+    activeCombatFloats = [];
+    isPlayingRoundAnimation = false;
+    isWaitingForCombatResolution = false;
+    updateLockTurnButton();
+    renderSyncedUI();
+
+    if (pendingGameOverSummary) {
+        const summary = pendingGameOverSummary;
+        pendingGameOverSummary = null;
+        applyGameOverSummary(summary);
+    }
+}
+
+function applyGameOverSummary(data) {
+    switchScreen('GAME_OVER');
+    const banner = document.getElementById('game-over-banner');
+    if (banner) {
+        banner.textContent = data.result;
+        if (data.result === 'VICTORY' || data.result === 'MINOR VICTORY') {
+            banner.className = 'outcome-banner outcome-victory';
+        } else if (data.result === 'DRAW') {
+            banner.className = 'outcome-banner outcome-draw';
+        } else {
+            banner.className = 'outcome-banner outcome-defeat';
+        }
+    }
+    const detailEl = document.getElementById('game-over-detail');
+    if (detailEl) detailEl.textContent = data.detail || '';
+    const goldEl = document.getElementById('game-over-gold');
+    if (goldEl) goldEl.textContent = data.goldEarned;
+}
+
 function drawArenaScreen() {
     const selected = getSelectedArenaParty();
 
@@ -1176,12 +1468,16 @@ function drawArenaScreen() {
         // Defeated parties leave the board entirely
         if (!partyIsAlive(ap)) return;
 
+        const drawTile = getPartyDrawTile(ap);
+        const fogX = Math.round(drawTile.x);
+        const fogY = Math.round(drawTile.y);
+
         const isFriendly = ap.faction === myFaction;
         // Enemies only appear on tiles inside your fog vision
-        if (!isFriendly && !isTileVisible(visibleTiles, ap.x, ap.y)) return;
+        if (!isFriendly && !isTileVisible(visibleTiles, fogX, fogY)) return;
 
-        const cx = ARENA_GRID.offsetX + (ap.x * ARENA_GRID.cellSize);
-        const cy = ARENA_GRID.offsetY + (ap.y * ARENA_GRID.cellSize);
+        const cx = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
+        const cy = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
         drawPartySpritesOnTile(ap, cx, cy);
 
         // Carried book above the tile — ALWAYS the book owner's colour (not the carrier's)
@@ -1196,8 +1492,9 @@ function drawArenaScreen() {
 
     // Outline on the selected living party's tile (deployment AND combat).
     if (selected && partyIsAlive(selected) && typeof selected.x === 'number' && typeof selected.y === 'number') {
-        const cx = ARENA_GRID.offsetX + (selected.x * ARENA_GRID.cellSize);
-        const cy = ARENA_GRID.offsetY + (selected.y * ARENA_GRID.cellSize);
+        const drawTile = getPartyDrawTile(selected);
+        const cx = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
+        const cy = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
         ctx.save();
         ctx.strokeStyle = getTeamColor(selected.faction);
         ctx.lineWidth = 2;
@@ -1209,6 +1506,9 @@ function drawArenaScreen() {
     if (arenaPhase === 'DEPLOYMENT' && (myFaction === 'p1' || myFaction === 'p2')) {
         drawDeploymentBoundary(myFaction);
     }
+
+    // Damage floats (ranged/melee) drawn above party heads during round playback.
+    drawCombatFloats();
 }
 
 function renderActiveScene() {
@@ -1465,43 +1765,15 @@ socket.on('transition-stage', (data) => {
 socket.on('tavern-sync', (data) => { applyTavernSync(data); });
 
 socket.on('GAME_OVER_SUMMARY', (data) => {
-    switchScreen('GAME_OVER');
-    const banner = document.getElementById('game-over-banner');
-    if (banner) {
-        banner.textContent = data.result;
-        if (data.result === 'VICTORY' || data.result === 'MINOR VICTORY') {
-            banner.className = 'outcome-banner outcome-victory';
-        } else if (data.result === 'DRAW') {
-            banner.className = 'outcome-banner outcome-draw';
-        } else {
-            banner.className = 'outcome-banner outcome-defeat';
-        }
+    // Let movement / fight pauses finish before leaving the arena.
+    if (isPlayingRoundAnimation) {
+        pendingGameOverSummary = data;
+        return;
     }
-    const detailEl = document.getElementById('game-over-detail');
-    if (detailEl) detailEl.textContent = data.detail || '';
-    const goldEl = document.getElementById('game-over-gold');
-    if (goldEl) goldEl.textContent = data.goldEarned;
+    applyGameOverSummary(data);
 });
 
-socket.on('resolve-round', (data) => {
-    const nextParties = data.arenaParties || arenaParties;
-    updatePartyFacingFromPositions(nextParties);
-    arenaParties = nextParties;
-    if (data.groundBooks) groundBooks = data.groundBooks;
-    if (data.nextRound) currentRound = data.nextRound;
-
-    // Clear paths but keep orders from the server snapshot.
-    getMyLivingArenaParties().forEach(ap => {
-        localPlans[ap.number] = {
-            order: ap.order || 'Advance',
-            path: []
-        };
-    });
-
-    isWaitingForCombatResolution = false;
-    updateLockTurnButton();
-    renderSyncedUI();
-
+socket.on('resolve-round', async (data) => {
     // Combat log UI removed — dump to the browser console for debugging.
     if (data.log) {
         const plain = String(data.log)
@@ -1509,6 +1781,39 @@ socket.on('resolve-round', (data) => {
             .replace(/<[^>]+>/g, '');
         console.log('[Combat Arena]\n' + plain);
     }
+
+    // Clear path previews immediately so they don't linger over the slides.
+    Object.keys(localPlans).forEach(num => {
+        if (localPlans[num]) localPlans[num].path = [];
+    });
+
+    const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+    isPlayingRoundAnimation = true;
+    isWaitingForCombatResolution = true;
+    updateLockTurnButton();
+
+    // Restore pre-fight HP/positions so KO'd heroes stay drawn until their damage float.
+    if (Array.isArray(data.partiesAtStart) && data.partiesAtStart.length) {
+        arenaParties = data.partiesAtStart;
+        animPosByUid = {};
+        arenaParties.forEach(ap => {
+            if (typeof ap.x === 'number' && typeof ap.y === 'number') {
+                animPosByUid[ap.uid] = { x: ap.x, y: ap.y };
+                partyLastPos[ap.uid] = { x: ap.x, y: ap.y };
+            }
+        });
+        renderSyncedUI();
+    }
+
+    try {
+        if (timeline.length > 0) {
+            await playResolveTimeline(timeline);
+        }
+    } catch (err) {
+        console.error('[Combat Arena] timeline playback failed', err);
+    }
+
+    finishRoundAnimation(data);
 });
 
 // Show this PC's LAN URLs so a second player on Wi-Fi knows what to open.
