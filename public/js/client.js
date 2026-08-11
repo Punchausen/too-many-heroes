@@ -953,7 +953,7 @@ function isClientBlockedTile(x, y) {
 }
 
 function getClientMovementCapacity(order, startX, startY) {
-    const base = { Seek: 1, Advance: 2, March: 3 };
+    const base = { Seek: 1, Advance: 3, March: 5 };
     let capacity = base[order] || 2;
     const tile = getClientTileAt(startX, startY);
     if (tile === 'DGY') capacity += 1;

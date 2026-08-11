@@ -36,8 +36,8 @@
 
 1. **Directive Orders & Movement Capacity:**
    - **Seek:** Maximum 1 cell path movement. Initiative Rank = 1 (Highest).
-   - **Advance:** Maximum 2 cells path movement. Initiative Rank = 2.
-   - **March:** Maximum 3 cells path movement. Initiative Rank = 3 (Lowest).
+   - **Advance:** Maximum 3 cells path movement. Initiative Rank = 2.
+   - **March:** Maximum 5 cells path movement. Initiative Rank = 3 (Lowest).
 
 2. **Initiative Resolution Hierarchy:**
    - Actions occur sequentially based on order initiative (`Seek` > `Advance` > `March`).

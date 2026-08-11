@@ -22,8 +22,8 @@ You must adhere 100% to the project specification at all times:
 
 ## 3. Movement & Initiative Order
 - Seek: Max 1 cell path | Initiative Rank 1 (Highest)
-- Advance: Max 2 cells path | Initiative Rank 2
-- March: Max 3 cells path | Initiative Rank 3 (Lowest)
+- Advance: Max 3 cells path | Initiative Rank 2
+- March: Max 5 cells path | Initiative Rank 3 (Lowest)
 - Same Order = Simultaneous Execution.
 
 ## 4. Combat Engagement Rules

@@ -76,7 +76,7 @@ let postMatchReturned = { p1: false, p2: false };
 const NAVIGABLE_ROOMS = ['TOWN_HQ', 'TAVERN', 'CASTLE'];
 const INITIATIVE_ORDER = { Seek: 1, Advance: 2, March: 3 };
 const INITIATIVE_BANDS = ['Seek', 'Advance', 'March'];
-const ORDER_CAPACITIES = { Seek: 1, Advance: 2, March: 3 };
+const ORDER_CAPACITIES = { Seek: 1, Advance: 3, March: 5 };
 const GRID_MAX_X = 10;
 const GRID_MAX_Y = 9;
 // Must match public/js/client.js FOG_VISION_RANGE — Manhattan steps from living friendly parties.
@@ -780,6 +780,30 @@ function truncatePlanFromStep(plan, stepIndex) {
     plan.path = plan.path.slice(0, stepIndex);
 }
 
+// Living enemy in an orthogonally adjacent tile? (same engagement rule as path planning)
+function partyIsAdjacentToLivingEnemy(ap) {
+    if (!partyIsAlive(ap) || typeof ap.x !== 'number') return false;
+    return arenaParties.some(other =>
+        other.uid !== ap.uid
+        && other.faction !== ap.faction
+        && partyIsAlive(other)
+        && typeof other.x === 'number'
+        && manhattan(ap, other) === 1
+    );
+}
+
+// Once adjacent to an enemy, remaining path is cancelled — no walking through after the clash.
+function stopPlansEngagedWithEnemy(plans, fromStepIndex, roundLog) {
+    plans.forEach(plan => {
+        if (!partyIsAlive(plan.ap)) return;
+        if (fromStepIndex >= plan.path.length) return;
+        if (!partyIsAdjacentToLivingEnemy(plan.ap)) return;
+        roundLog += ` -> ${plan.ap.name} engaged — stops (cannot pass through / leave while adjacent to an enemy).<br>`;
+        truncatePlanFromStep(plan, fromStepIndex);
+    });
+    return roundLog;
+}
+
 // Temporary snippet — will be applied into server.js via patch script.
 // After one move step: collect ranged pair-fights, then melee pair-fights.
 // Sequence: all ranged (by Seek=3/Advance=2/March=1 pair score), then all melee (same scoring).
@@ -1042,6 +1066,9 @@ function resolveSteppedMovementAndCombat(roundLog) {
         const isMoveStep = step < movementSteps;
 
         if (isMoveStep) {
+            // Already next to an enemy from an earlier step? No more walking this turn.
+            roundLog = stopPlansEngagedWithEnemy(plans, step, roundLog);
+
             // Intended one-tile moves this step (alive parties that still have path left).
             let intended = plans
                 .filter(plan => partyIsAlive(plan.ap) && step < plan.path.length)
@@ -1060,9 +1087,10 @@ function resolveSteppedMovementAndCombat(roundLog) {
 
                 const leaving = new Set(intended.map(m => m.plan.ap.uid));
 
-                // Cannot enter a tile still held by someone who is not leaving this step
-                // (friend or foe). Drawing a path through friends is allowed; resolve stops
-                // you if they stay put. Same-step vacate (they leave as you enter) is OK.
+                // Occupancy:
+                // - Enemy on the tile → always blocked (even if they are also leaving — no swaps /
+                //   pass-through with foes).
+                // - Friend on the tile → blocked only if they are NOT leaving this step.
                 intended = intended.filter(m => {
                     const holder = arenaParties.find(ap =>
                         partyIsAlive(ap)
@@ -1070,7 +1098,9 @@ function resolveSteppedMovementAndCombat(roundLog) {
                         && ap.x === m.to.x
                         && ap.y === m.to.y
                     );
-                    if (holder && !leaving.has(holder.uid)) {
+                    if (!holder) return true;
+                    const isEnemy = holder.faction !== m.plan.ap.faction;
+                    if (isEnemy || !leaving.has(holder.uid)) {
                         roundLog += ` -> ${m.plan.ap.name} blocked by ${holder.name} at (${m.to.x},${m.to.y}); stops.<br>`;
                         truncatePlanFromStep(m.plan, step);
                         changed = true;
@@ -1117,6 +1147,9 @@ function resolveSteppedMovementAndCombat(roundLog) {
                 roundLog += ` -> ${m.plan.ap.name} steps to (${m.to.x},${m.to.y}).<br>`;
                 roundLog = tryPickupGroundBook(m.plan.ap, roundLog);
             });
+
+            // Just walked into contact? Cancel the rest of the path after this step.
+            roundLog = stopPlansEngagedWithEnemy(plans, step + 1, roundLog);
         }
 
         // Combat after each move step; also once when nobody moved (step 0 only).
