@@ -25,10 +25,10 @@ const TEAM_COLORS = { p1: '#1e88e5', p2: '#d62828' };
 
 // Display-only hero stat fallbacks for cards when the server only sends a role name.
 const LOCAL_HERO_TEMPLATES = {
-    'Peasant':   { hp: 30,  melee: 10, range: 0 },
+    'Peasant':   { hp: 50,  melee: 10, range: 0 },
     'Barbarian': { hp: 100, melee: 40, range: 0 },
-    'Elf':       { hp: 50,  melee: 15, range: 25 },
-    'Wizard':    { hp: 40,  melee: 10, range: 35 },
+    'Elf':       { hp: 40,  melee: 15, range: 25 },
+    'Wizard':    { hp: 30,  melee: 10, range: 35 },
     'Knight':    { hp: 120, melee: 25, range: 0 }
 };
 
@@ -85,13 +85,13 @@ let matchActive = true;
 // Round resolution playback (server still owns outcomes; we only animate them).
 const ROUND_MOVE_MS = 500;        // slide duration for one square
 const ROUND_STEP_GAP_MS = 1000;   // pause between movement steps (no combat)
-const COMBAT_PAUSE_MS = 1000;     // pause before each sequenced fight
-const COMBAT_FLOAT_MS = 1000;     // damage number rise + fade
+const COMBAT_PAUSE_MS = 1000;     // wait before opening the fight window
+const COMBAT_OPEN_MS = 500;       // window expands from centre
+const COMBAT_CLOSE_MS = 500;      // window collapses to centre
+const COMBAT_FLOAT_MS = 1000;     // per-hero damage float duration
 let isPlayingRoundAnimation = false;
 // While animating: fractional tile positions { [uid]: { x, y } }. Null = use server ints.
 let animPosByUid = null;
-// Floating damage numbers currently on screen: { targetUid, damage, attackerFaction, kind, startTime }
-let activeCombatFloats = [];
 // If GAME_OVER arrives mid-animation, show it after the slides finish.
 let pendingGameOverSummary = null;
 
@@ -1179,124 +1179,173 @@ function applyTimelinePartySnapshot(parties, books) {
     renderSyncedUI();
 }
 
-function spawnCombatFloats(floats) {
-    const now = performance.now();
-    (floats || []).forEach(f => {
-        // Pin to the target's tile at spawn so the number can't drift to a neighbour tile.
-        const ap = arenaParties.find(p => p.uid === f.targetUid);
-        const tile = ap ? getPartyDrawTile(ap) : null;
-        const tileX = tile && typeof tile.x === 'number' ? Math.round(tile.x) : null;
-        const tileY = tile && typeof tile.y === 'number' ? Math.round(tile.y) : null;
-        activeCombatFloats.push({
-            targetUid: f.targetUid,
-            damage: f.damage,
-            attackerFaction: f.attackerFaction,
-            kind: f.kind || 'melee',
-            startTime: now,
-            tileX,
-            tileY
+function terrainColorForCombatTile(tileInfo) {
+    if (!tileInfo) return '#333';
+    const terrain = tileInfo.terrain;
+    if (terrain === 'RED') {
+        const anchors = findClientBuildingAnchors();
+        if (anchors.left && anchors.left.x === tileInfo.x && anchors.left.y === tileInfo.y) {
+            return TEAM_COLORS.p1;
+        }
+        if (anchors.right && anchors.right.x === tileInfo.x && anchors.right.y === tileInfo.y) {
+            return TEAM_COLORS.p2;
+        }
+        return ARENA_TILE_COLORS.RED;
+    }
+    return ARENA_TILE_COLORS[terrain] || '#333';
+}
+
+function randomCombatHeroPos() {
+    // Min 10% from left/right/bottom; min 40% from top → y in [40%, 90%], x in [10%, 90%]
+    return {
+        left: 10 + Math.random() * 80,
+        top: 40 + Math.random() * 50
+    };
+}
+
+function placeCombatTheatreHeroes(halfEl, party) {
+    halfEl.innerHTML = '';
+    if (!party || !party.members) return;
+    const used = [];
+    party.members.forEach((member, memberIndex) => {
+        if (!member || member.hp <= 0) return;
+        const teamArt = HERO_PORTRAITS_TEAM[member.role];
+        const src = teamArt ? teamArt[party.faction] : null;
+        if (!src) return;
+
+        let pos = randomCombatHeroPos();
+        for (let attempt = 0; attempt < 8; attempt++) {
+            const clash = used.some(u =>
+                Math.abs(u.left - pos.left) < 14 && Math.abs(u.top - pos.top) < 16
+            );
+            if (!clash) break;
+            pos = randomCombatHeroPos();
+        }
+        used.push(pos);
+
+        const img = document.createElement('img');
+        img.className = 'combat-theatre-hero';
+        img.src = src;
+        img.alt = member.role;
+        img.dataset.uid = party.uid;
+        img.dataset.memberIndex = String(memberIndex);
+        img.style.left = pos.left + '%';
+        img.style.top = pos.top + '%';
+        img.style.transform = 'translate(-50%, -50%)';
+        halfEl.appendChild(img);
+    });
+}
+
+function getCombatTheatreHeroEl(uid, memberIndex) {
+    return document.querySelector(
+        `.combat-theatre-hero[data-uid="${uid}"][data-member-index="${memberIndex}"]`
+    );
+}
+
+function openCombatTheatre(combat) {
+    return new Promise(resolve => {
+        const theatre = document.getElementById('combat-theatre');
+        const leftHalf = document.getElementById('combat-half-left');
+        const rightHalf = document.getElementById('combat-half-right');
+        if (!theatre || !leftHalf || !rightHalf) {
+            resolve();
+            return;
+        }
+
+        const leftParty = arenaParties.find(p => p.uid === combat.leftUid);
+        const rightParty = arenaParties.find(p => p.uid === combat.rightUid);
+
+        leftHalf.style.background = terrainColorForCombatTile(combat.leftTile);
+        rightHalf.style.background = terrainColorForCombatTile(combat.rightTile);
+        placeCombatTheatreHeroes(leftHalf, leftParty);
+        placeCombatTheatreHeroes(rightHalf, rightParty);
+
+        theatre.classList.add('is-open');
+        theatre.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => {
+            theatre.classList.add('is-expanded');
+            setTimeout(resolve, COMBAT_OPEN_MS);
         });
     });
 }
 
-// Simple canvas icons next to the damage number (bow = ranged, swords = melee).
-function drawCombatKindIcon(kind, x, y, color, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    if (kind === 'ranged') {
-        // Bow arc + arrow
-        ctx.beginPath();
-        ctx.arc(x, y, 7, -Math.PI * 0.7, Math.PI * 0.7, false);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - 8, y);
-        ctx.lineTo(x + 8, y);
-        ctx.moveTo(x + 5, y - 3);
-        ctx.lineTo(x + 8, y);
-        ctx.lineTo(x + 5, y + 3);
-        ctx.stroke();
-    } else {
-        // Two crossed strokes = swords
-        ctx.beginPath();
-        ctx.moveTo(x - 7, y + 6);
-        ctx.lineTo(x + 7, y - 6);
-        ctx.moveTo(x + 7, y + 6);
-        ctx.lineTo(x - 7, y - 6);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x - 7, y + 6, 2, 0, Math.PI * 2);
-        ctx.arc(x + 7, y + 6, 2, 0, Math.PI * 2);
-        ctx.fill();
-    }
-    ctx.restore();
-}
-
-function drawCombatFloats() {
-    if (!activeCombatFloats.length) return;
-    const now = performance.now();
-    const risePx = ARENA_GRID.cellSize * 0.25;
-    // Start ~10% of a tile below the top edge (10px at native 100px tiles).
-    const startInsetY = ARENA_GRID.cellSize * 0.10;
-    activeCombatFloats = activeCombatFloats.filter(f => (now - f.startTime) < COMBAT_FLOAT_MS);
-
-    activeCombatFloats.forEach(f => {
-        let tileX = f.tileX;
-        let tileY = f.tileY;
-        if (typeof tileX !== 'number' || typeof tileY !== 'number') {
-            const ap = arenaParties.find(p => p.uid === f.targetUid);
-            if (!ap || typeof ap.x !== 'number') return;
-            const tile = getPartyDrawTile(ap);
-            tileX = Math.round(tile.x);
-            tileY = Math.round(tile.y);
+function closeCombatTheatre() {
+    return new Promise(resolve => {
+        const theatre = document.getElementById('combat-theatre');
+        if (!theatre) {
+            resolve();
+            return;
         }
-        const t = Math.min(1, (now - f.startTime) / COMBAT_FLOAT_MS);
-        const alpha = 1 - t;
-        const color = getTeamColor(f.attackerFaction);
-        const cx = ARENA_GRID.offsetX + (tileX * ARENA_GRID.cellSize) + ARENA_GRID.cellSize / 2;
-        const cy = ARENA_GRID.offsetY + (tileY * ARENA_GRID.cellSize) + startInsetY - (risePx * t);
-
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.font = 'bold 18px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.75)';
-        ctx.fillStyle = color;
-        const label = String(f.damage);
-        ctx.strokeText(label, cx - 10, cy);
-        ctx.fillText(label, cx - 10, cy);
-        const textW = ctx.measureText(label).width;
-        drawCombatKindIcon(f.kind, cx - 10 + textW / 2 + 12, cy, color, alpha);
-        ctx.restore();
+        theatre.classList.remove('is-expanded');
+        setTimeout(() => {
+            theatre.classList.remove('is-open');
+            theatre.setAttribute('aria-hidden', 'true');
+            const leftHalf = document.getElementById('combat-half-left');
+            const rightHalf = document.getElementById('combat-half-right');
+            if (leftHalf) leftHalf.innerHTML = '';
+            if (rightHalf) rightHalf.innerHTML = '';
+            resolve();
+        }, COMBAT_CLOSE_MS);
     });
 }
 
-// Play one step's fights: pause → float wave(s) → next fight. HP updates when a float appears.
+function spawnTheatreFloat(heroEl, damage, color, kind) {
+    if (!heroEl || !heroEl.parentElement) return;
+    const floatEl = document.createElement('div');
+    floatEl.className = 'combat-theatre-float';
+    floatEl.style.color = color;
+    floatEl.style.left = heroEl.style.left;
+    floatEl.style.top = heroEl.style.top;
+    const icon = kind === 'ranged' ? '➳' : '⚔';
+    floatEl.textContent = `${damage} ${icon}`;
+    heroEl.parentElement.appendChild(floatEl);
+    setTimeout(() => floatEl.remove(), COMBAT_FLOAT_MS);
+}
+
+async function playStrikeUnitHits(strike) {
+    const hits = strike.unitHits || [];
+    const color = getTeamColor(strike.attackerFaction);
+    for (let i = 0; i < hits.length; i++) {
+        const hit = hits[i];
+        const heroEl = getCombatTheatreHeroEl(strike.defenderUid, hit.memberIndex);
+        spawnTheatreFloat(heroEl, hit.damage, color, strike.kind);
+        if (hit.knockedOut && heroEl) {
+            heroEl.classList.add('is-ko');
+            heroEl.style.transform = 'translate(-50%, -50%) rotate(90deg)';
+        }
+        await sleepMs(COMBAT_FLOAT_MS);
+    }
+}
+
+async function playTheatreWave(wave) {
+    const strikes = wave.strikes || [];
+    if (!strikes.length) return;
+    await Promise.all(strikes.map(strike => playStrikeUnitHits(strike)));
+}
+
 async function playStepCombats(combats) {
     if (!combats || !combats.length) return;
     for (let c = 0; c < combats.length; c++) {
         const combat = combats[c];
         await sleepMs(COMBAT_PAUSE_MS);
+        await openCombatTheatre(combat);
+
         const waves = combat.waves || [];
+        let lastWave = null;
         for (let w = 0; w < waves.length; w++) {
-            const wave = waves[w];
-            spawnCombatFloats(wave.floats || []);
-            applyTimelinePartySnapshot(wave.arenaParties, wave.groundBooks);
-            await sleepMs(COMBAT_FLOAT_MS);
+            lastWave = waves[w];
+            await playTheatreWave(lastWave);
         }
+
+        if (lastWave) {
+            applyTimelinePartySnapshot(lastWave.arenaParties, lastWave.groundBooks);
+        }
+        await closeCombatTheatre();
     }
-    activeCombatFloats = [];
 }
 
-// Play server timeline: 0.5s slides, sequenced combat floats, 1s gap before the next move.
 async function playResolveTimeline(timeline) {
     if (!animPosByUid) animPosByUid = {};
-    activeCombatFloats = [];
     arenaParties.forEach(ap => {
         if (typeof ap.x === 'number' && typeof ap.y === 'number') {
             animPosByUid[ap.uid] = { x: ap.x, y: ap.y };
@@ -1307,7 +1356,6 @@ async function playResolveTimeline(timeline) {
         const step = timeline[i];
         await animateTimelineMoves(step.moves || []);
 
-        // Land on post-move positions first (HP still pre-combat until floats appear).
         (step.moves || []).forEach(m => {
             animPosByUid[m.uid] = { x: m.to.x, y: m.to.y };
             const ap = arenaParties.find(p => p.uid === m.uid);
@@ -1319,8 +1367,6 @@ async function playResolveTimeline(timeline) {
         });
 
         await playStepCombats(step.combats || []);
-
-        // Final board state for this step (covers hold-only / no-combat steps too).
         applyTimelinePartySnapshot(step.arenaParties, step.groundBooks);
 
         const isLast = i === timeline.length - 1;
@@ -1328,7 +1374,6 @@ async function playResolveTimeline(timeline) {
             await sleepMs(ROUND_STEP_GAP_MS);
         }
     }
-    activeCombatFloats = [];
 }
 
 function finishRoundAnimation(data) {
@@ -1346,7 +1391,6 @@ function finishRoundAnimation(data) {
     });
 
     animPosByUid = null;
-    activeCombatFloats = [];
     isPlayingRoundAnimation = false;
     isWaitingForCombatResolution = false;
     updateLockTurnButton();
@@ -1507,8 +1551,6 @@ function drawArenaScreen() {
         drawDeploymentBoundary(myFaction);
     }
 
-    // Damage floats (ranged/melee) drawn above party heads during round playback.
-    drawCombatFloats();
 }
 
 function renderActiveScene() {

@@ -7,10 +7,10 @@ let uiButtons = {};
 
 /* COMBAT BLUEPRINTS & MUTABLE STATE MANIFEST */
 const HERO_TEMPLATES = {
-    'Peasant':   { hp: 30,  melee: 10, range: 0 },  // Baseline starting class
+    'Peasant':   { hp: 50,  melee: 10, range: 0 },  // Baseline starting class
     'Barbarian': { hp: 100, melee: 40, range: 0 },
-    'Elf':       { hp: 50,  melee: 15, range: 25 },
-    'Wizard':    { hp: 40,  melee: 10, range: 35 },
+    'Elf':       { hp: 40,  melee: 15, range: 25 },
+    'Wizard':    { hp: 30,  melee: 10, range: 35 },
     'Knight':    { hp: 120, melee: 25, range: 0 }
 };
 

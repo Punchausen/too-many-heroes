@@ -102,10 +102,10 @@ const ARENA_TILE_MAP = [
 const BLOCKED_TILES = { RED: true, LGY: true };
 
 const HERO_TEMPLATES = {
-    Peasant:   { hp: 30,  melee: 10, range: 0 },
+    Peasant:   { hp: 50,  melee: 10, range: 0 },
     Barbarian: { hp: 100, melee: 40, range: 0 },
-    Elf:       { hp: 50,  melee: 15, range: 25 },
-    Wizard:    { hp: 40,  melee: 10, range: 35 },
+    Elf:       { hp: 40,  melee: 15, range: 25 },
+    Wizard:    { hp: 30,  melee: 10, range: 35 },
     Knight:    { hp: 120, melee: 25, range: 0 }
 };
 
@@ -747,28 +747,442 @@ function sortCombatPairsByScore(pairs) {
     });
 }
 
-// Apply one hit, log it, drop books if someone was KO'd. Returns a float + board snapshot for the client.
-// If the attacker cannot see the target (fog), no damage — float is null.
-function applyCombatHitForTimeline(attacker, target, damage, kind, roundLog) {
-    if (!attackerCanSeeTarget(attacker, target)) {
-        roundLog += ` -> ${attacker.name} cannot ${kind}-attack ${target.name} (target hidden in fog).<br>`;
-        return { float: null, roundLog };
+// Combat theatre helpers + resolveStepCombat (spliced into server.js)
+
+function livingMembersByTankOrder(members) {
+    return members
+        .map((m, index) => ({ m, index }))
+        .filter(x => x.m && x.m.hp > 0)
+        .sort((a, b) => {
+            if (b.m.baseHp !== a.m.baseHp) return b.m.baseHp - a.m.baseHp;
+            return a.index - b.index;
+        });
+}
+
+function getUnitMeleeOutput(unit) {
+    return (unit.melee || 0) + (unit.range || 0);
+}
+
+function getUnitRangedOutput(unit, order) {
+    if (order === 'March') return 0;
+    return unit.range || 0;
+}
+
+function partyMeleeOutput(ap) {
+    let sum = 0;
+    getAliveMembers(ap.members).forEach(u => { sum += getUnitMeleeOutput(u); });
+    return sum;
+}
+
+function partyRangedOutput(ap) {
+    let sum = 0;
+    getAliveMembers(ap.members).forEach(u => { sum += getUnitRangedOutput(u, ap.order); });
+    return sum;
+}
+
+// Plan spillover without mutating, then caller applies. Highest baseHp tanks first.
+function allocateSpilloverHits(members, totalDamage) {
+    const hits = [];
+    let remaining = totalDamage;
+    if (remaining <= 0) return hits;
+    const hp = members.map(m => (m && m.hp > 0 ? m.hp : 0));
+    while (remaining > 0) {
+        let best = -1;
+        for (let i = 0; i < members.length; i++) {
+            if (hp[i] <= 0) continue;
+            if (best < 0 || members[i].baseHp > members[best].baseHp) best = i;
+        }
+        if (best < 0) break;
+        const dealt = Math.min(hp[best], remaining);
+        hp[best] -= dealt;
+        remaining -= dealt;
+        hits.push({
+            memberIndex: best,
+            damage: dealt,
+            remainingHp: hp[best],
+            knockedOut: hp[best] <= 0
+        });
     }
-    const label = `${attacker.name} ${kind} vs ${target.name}`;
+    return hits;
+}
+
+function applyUnitHitsToMembers(members, hits) {
+    (hits || []).forEach(h => {
+        if (!members[h.memberIndex]) return;
+        members[h.memberIndex].hp = h.remainingHp;
+    });
+}
+
+// Left = leftmost on map; if same column, higher on screen (smaller y).
+function combatWindowMeta(a, b) {
+    let left;
+    let right;
+    if (a.x !== b.x) {
+        left = a.x < b.x ? a : b;
+        right = left === a ? b : a;
+    } else {
+        left = a.y <= b.y ? a : b;
+        right = left === a ? b : a;
+    }
+    return {
+        leftUid: left.uid,
+        rightUid: right.uid,
+        leftTile: { x: left.x, y: left.y, terrain: getTileAt(left.x, left.y) },
+        rightTile: { x: right.x, y: right.y, terrain: getTileAt(right.x, right.y) }
+    };
+}
+
+function makeStrike(attacker, defender, damage, kind, attackerMemberIndex, roundLog) {
+    if (!attackerCanSeeTarget(attacker, defender)) {
+        roundLog += ` -> ${attacker.name} cannot ${kind}-attack ${defender.name} (target hidden in fog).<br>`;
+        return { strike: null, roundLog };
+    }
+    const label = `${attacker.name} ${kind} vs ${defender.name}`;
     roundLog += `[${label}] ${damage} dmg<br>`;
-    applySpilloverDamage(target.members, damage, (str) => { roundLog += str; }, label);
+    const unitHits = allocateSpilloverHits(defender.members, damage);
+    applyUnitHitsToMembers(defender.members, unitHits);
+    unitHits.forEach(h => {
+        const role = defender.members[h.memberIndex] ? defender.members[h.memberIndex].role : '?';
+        if (h.knockedOut) {
+            roundLog += ` -> [${label}] ${role} takes ${h.damage} and falls unconscious!<br>`;
+        } else {
+            roundLog += ` -> [${label}] ${role} takes ${h.damage} (${h.remainingHp} HP left).<br>`;
+        }
+    });
     roundLog = dropBooksFromKnockouts(roundLog);
     return {
-        float: {
-            targetUid: target.uid,
-            damage,
+        strike: {
+            attackerUid: attacker.uid,
+            defenderUid: defender.uid,
             attackerFaction: attacker.faction,
-            kind
+            attackerMemberIndex,
+            kind,
+            damage,
+            unitHits
         },
-        arenaParties: publicArenaParties(),
-        groundBooks: snapshotGroundBooks(),
         roundLog
     };
+}
+
+function pushWave(waves, strikes, roundLog) {
+    const real = (strikes || []).filter(Boolean);
+    if (!real.length) return roundLog;
+    waves.push({
+        strikes: real,
+        arenaParties: publicArenaParties(),
+        groundBooks: snapshotGroundBooks()
+    });
+    return roundLog;
+}
+
+// Resolve one enemy pair for melee into theatre waves.
+// foeCount* = how many melee foes that party faces this step (for even damage split).
+function resolveMeleePairTheatre(pair, roundLog, foeCountA, foeCountB) {
+    const waves = [];
+    const a = pair.a;
+    const b = pair.b;
+    const initA = INITIATIVE_ORDER[a.order] || 2;
+    const initB = INITIATIVE_ORDER[b.order] || 2;
+    const splitA = Math.max(1, foeCountA || 1);
+    const splitB = Math.max(1, foeCountB || 1);
+
+    function unitShare(unitDmg, foeCount, foeIndex) {
+        const shares = splitDamageEvenly(unitDmg, foeCount);
+        return shares[Math.min(foeIndex, shares.length - 1)] || 0;
+    }
+
+    if (initA === initB) {
+        // Same order: each tank-rank strikes as a sequence; both sides at once.
+        const orderA = livingMembersByTankOrder(a.members);
+        const orderB = livingMembersByTankOrder(b.members);
+        const maxLen = Math.max(orderA.length, orderB.length);
+        const idxA = typeof pair.foeIndexA === 'number' ? pair.foeIndexA : 0;
+        const idxB = typeof pair.foeIndexB === 'number' ? pair.foeIndexB : 0;
+        for (let i = 0; i < maxLen; i++) {
+            const planned = [];
+            if (orderA[i] && a.members[orderA[i].index].hp > 0 && partyIsAlive(b)
+                && attackerCanSeeTarget(a, b)) {
+                const dmg = unitShare(getUnitMeleeOutput(orderA[i].m), splitA, idxA);
+                planned.push({
+                    attacker: a,
+                    defender: b,
+                    attackerMemberIndex: orderA[i].index,
+                    damage: dmg,
+                    unitHits: allocateSpilloverHits(b.members, dmg),
+                    kind: 'melee'
+                });
+            }
+            if (orderB[i] && b.members[orderB[i].index].hp > 0 && partyIsAlive(a)
+                && attackerCanSeeTarget(b, a)) {
+                const dmg = unitShare(getUnitMeleeOutput(orderB[i].m), splitB, idxB);
+                planned.push({
+                    attacker: b,
+                    defender: a,
+                    attackerMemberIndex: orderB[i].index,
+                    damage: dmg,
+                    unitHits: allocateSpilloverHits(a.members, dmg),
+                    kind: 'melee'
+                });
+            }
+            const strikes = [];
+            planned.forEach(p => {
+                const label = `${p.attacker.name} ${p.kind} vs ${p.defender.name}`;
+                roundLog += `[${label}] ${p.damage} dmg<br>`;
+                applyUnitHitsToMembers(p.defender.members, p.unitHits);
+                p.unitHits.forEach(h => {
+                    const role = p.defender.members[h.memberIndex]
+                        ? p.defender.members[h.memberIndex].role : '?';
+                    if (h.knockedOut) {
+                        roundLog += ` -> [${label}] ${role} takes ${h.damage} and falls unconscious!<br>`;
+                    } else {
+                        roundLog += ` -> [${label}] ${role} takes ${h.damage} (${h.remainingHp} HP left).<br>`;
+                    }
+                });
+                strikes.push({
+                    attackerUid: p.attacker.uid,
+                    defenderUid: p.defender.uid,
+                    attackerFaction: p.attacker.faction,
+                    attackerMemberIndex: p.attackerMemberIndex,
+                    kind: p.kind,
+                    damage: p.damage,
+                    unitHits: p.unitHits
+                });
+            });
+            if (strikes.length) roundLog = dropBooksFromKnockouts(roundLog);
+            roundLog = pushWave(waves, strikes, roundLog);
+        }
+    } else {
+        // Initiative winner: all living members damage in ONE sequence, then counter.
+        const first = initA < initB ? a : b;
+        const second = initA < initB ? b : a;
+        const firstSplit = first.uid === a.uid ? splitA : splitB;
+        const firstIdx = first.uid === a.uid
+            ? (typeof pair.foeIndexA === 'number' ? pair.foeIndexA : 0)
+            : (typeof pair.foeIndexB === 'number' ? pair.foeIndexB : 0);
+        const secondSplit = second.uid === a.uid ? splitA : splitB;
+        const secondIdx = second.uid === a.uid
+            ? (typeof pair.foeIndexA === 'number' ? pair.foeIndexA : 0)
+            : (typeof pair.foeIndexB === 'number' ? pair.foeIndexB : 0);
+
+        if (partyIsAlive(first) && partyIsAlive(second)) {
+            let dmg = unitShare(Math.floor(partyMeleeOutput(first) * 1.2), firstSplit, firstIdx);
+            roundLog += ` -> (+20% surprise on ${first.name})<br>`;
+            const res = makeStrike(first, second, dmg, 'melee', null, roundLog);
+            roundLog = res.roundLog;
+            roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
+        }
+        if (partyIsAlive(first) && partyIsAlive(second) && manhattan(first, second) === 1) {
+            const dmg = unitShare(partyMeleeOutput(second), secondSplit, secondIdx);
+            const res = makeStrike(second, first, dmg, 'melee', null, roundLog);
+            roundLog = res.roundLog;
+            roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
+        }
+    }
+
+    return { waves, roundLog };
+}
+
+function resolveRangedPairTheatre(pair, roundLog) {
+    const waves = [];
+    // Rebuild party refs from uids (live arena objects).
+    const parties = [];
+    pair.hits.forEach(h => {
+        if (!parties.some(p => p.uid === h.attacker.uid)) parties.push(h.attacker);
+        if (!parties.some(p => p.uid === h.target.uid)) parties.push(h.target);
+    });
+    if (parties.length < 2) return { waves, roundLog };
+    const a = parties[0];
+    const b = parties[1];
+    const initA = INITIATIVE_ORDER[a.order] || 2;
+    const initB = INITIATIVE_ORDER[b.order] || 2;
+
+    const aCanShoot = partyRangedOutput(a) > 0 && pair.hits.some(h => h.attacker.uid === a.uid);
+    const bCanShoot = partyRangedOutput(b) > 0 && pair.hits.some(h => h.attacker.uid === b.uid);
+
+    if (initA === initB && aCanShoot && bCanShoot) {
+        const orderA = livingMembersByTankOrder(a.members).filter(x => getUnitRangedOutput(x.m, a.order) > 0);
+        const orderB = livingMembersByTankOrder(b.members).filter(x => getUnitRangedOutput(x.m, b.order) > 0);
+        const maxLen = Math.max(orderA.length, orderB.length);
+        for (let i = 0; i < maxLen; i++) {
+            const planned = [];
+            if (orderA[i] && a.members[orderA[i].index].hp > 0 && partyIsAlive(b)
+                && attackerCanSeeTarget(a, b)) {
+                let dmg = getUnitRangedOutput(orderA[i].m, a.order);
+                dmg = applyRangedDefenceModifier(dmg, b);
+                planned.push({
+                    attacker: a, defender: b, attackerMemberIndex: orderA[i].index,
+                    damage: dmg, unitHits: allocateSpilloverHits(b.members, dmg), kind: 'ranged'
+                });
+            }
+            if (orderB[i] && b.members[orderB[i].index].hp > 0 && partyIsAlive(a)
+                && attackerCanSeeTarget(b, a)) {
+                let dmg = getUnitRangedOutput(orderB[i].m, b.order);
+                dmg = applyRangedDefenceModifier(dmg, a);
+                planned.push({
+                    attacker: b, defender: a, attackerMemberIndex: orderB[i].index,
+                    damage: dmg, unitHits: allocateSpilloverHits(a.members, dmg), kind: 'ranged'
+                });
+            }
+            const strikes = [];
+            planned.forEach(p => {
+                const label = `${p.attacker.name} ${p.kind} vs ${p.defender.name}`;
+                roundLog += `[${label}] ${p.damage} dmg<br>`;
+                applyUnitHitsToMembers(p.defender.members, p.unitHits);
+                p.unitHits.forEach(h => {
+                    const role = p.defender.members[h.memberIndex]
+                        ? p.defender.members[h.memberIndex].role : '?';
+                    if (h.knockedOut) {
+                        roundLog += ` -> [${label}] ${role} takes ${h.damage} and falls unconscious!<br>`;
+                    } else {
+                        roundLog += ` -> [${label}] ${role} takes ${h.damage} (${h.remainingHp} HP left).<br>`;
+                    }
+                });
+                strikes.push({
+                    attackerUid: p.attacker.uid,
+                    defenderUid: p.defender.uid,
+                    attackerFaction: p.attacker.faction,
+                    attackerMemberIndex: p.attackerMemberIndex,
+                    kind: p.kind,
+                    damage: p.damage,
+                    unitHits: p.unitHits
+                });
+            });
+            if (strikes.length) roundLog = dropBooksFromKnockouts(roundLog);
+            roundLog = pushWave(waves, strikes, roundLog);
+        }
+    } else {
+        // Fire in initiative order; each side that can shoot does all members in one sequence.
+        const shooters = [];
+        if (aCanShoot) shooters.push(a);
+        if (bCanShoot) shooters.push(b);
+        shooters.sort((p, q) => (INITIATIVE_ORDER[p.order] || 2) - (INITIATIVE_ORDER[q.order] || 2));
+        shooters.forEach(attacker => {
+            const defender = attacker.uid === a.uid ? b : a;
+            if (!partyIsAlive(attacker) || !partyIsAlive(defender)) return;
+            let dmg = partyRangedOutput(attacker);
+            dmg = applyRangedDefenceModifier(dmg, defender);
+            const res = makeStrike(attacker, defender, dmg, 'ranged', null, roundLog);
+            roundLog = res.roundLog;
+            roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
+        });
+    }
+
+    return { waves, roundLog };
+}
+
+// After one move step: ranged pair-fights, then melee pair-fights (theatre waves).
+// finishedMoveUids = parties with no path steps left after this step (required to shoot).
+function resolveStepCombat(meleePairsDone, rangedDone, roundLog, finishedMoveUids) {
+    const combats = [];
+    const canShootNow = (uid) => !finishedMoveUids || finishedMoveUids.has(uid);
+
+    // --- Collect ranged pair opportunities (each party shoots at most once this turn) ---
+    const rangedHitsByPair = new Map();
+    INITIATIVE_BANDS.forEach(bandName => {
+        const attackers = arenaParties.filter(ap => ap.order === bandName && partyIsAlive(ap));
+        attackers.forEach(attacker => {
+            if (rangedDone.has(attacker.uid)) return;
+            // Must have finished this turn's movement — no shoot-then-keep-walking.
+            if (!canShootNow(attacker.uid)) return;
+            if (partyRangedOutput(attacker) <= 0) return;
+            const rangedTargets = arenaParties.filter(e =>
+                e.faction !== attacker.faction
+                && partyIsAlive(e)
+                && manhattan(attacker, e) === 2
+                && attackerCanSeeTarget(attacker, e)
+            );
+            if (!rangedTargets.length) return;
+
+            rangedDone.add(attacker.uid);
+            rangedTargets.forEach((target) => {
+                const key = meleePairKey(attacker, target);
+                if (!rangedHitsByPair.has(key)) {
+                    rangedHitsByPair.set(key, {
+                        key,
+                        score: combatPairScore(attacker, target),
+                        hits: []
+                    });
+                }
+                rangedHitsByPair.get(key).hits.push({ attacker, target });
+            });
+        });
+    });
+
+    const rangedPairs = Array.from(rangedHitsByPair.values());
+    sortCombatPairsByScore(rangedPairs);
+
+    rangedPairs.forEach(pair => {
+        const parties = [];
+        pair.hits.forEach(h => {
+            if (!parties.some(p => p.uid === h.attacker.uid)) parties.push(h.attacker);
+            if (!parties.some(p => p.uid === h.target.uid)) parties.push(h.target);
+        });
+        if (parties.length < 2) return;
+        const meta = combatWindowMeta(parties[0], parties[1]);
+        const result = resolveRangedPairTheatre(pair, roundLog);
+        roundLog = result.roundLog;
+        if (result.waves.length) {
+            combats.push({
+                kind: 'ranged',
+                score: pair.score,
+                ...meta,
+                waves: result.waves
+            });
+        }
+    });
+
+    // --- Melee pairs ---
+    const pendingPairs = [];
+    const living = arenaParties.filter(ap => partyIsAlive(ap));
+    for (let li = 0; li < living.length; li++) {
+        for (let lj = li + 1; lj < living.length; lj++) {
+            const a = living[li];
+            const b = living[lj];
+            if (a.faction === b.faction) continue;
+            if (manhattan(a, b) !== 1) continue;
+            const key = meleePairKey(a, b);
+            if (meleePairsDone.has(key)) continue;
+            pendingPairs.push({ a, b, key, score: combatPairScore(a, b) });
+        }
+    }
+
+    sortCombatPairsByScore(pendingPairs);
+
+    // For each party, list melee foes this step (stable uid order) so damage can be split evenly.
+    const meleeFoesByUid = new Map();
+    pendingPairs.forEach(pair => {
+        if (!meleeFoesByUid.has(pair.a.uid)) meleeFoesByUid.set(pair.a.uid, []);
+        if (!meleeFoesByUid.has(pair.b.uid)) meleeFoesByUid.set(pair.b.uid, []);
+        meleeFoesByUid.get(pair.a.uid).push(pair.b.uid);
+        meleeFoesByUid.get(pair.b.uid).push(pair.a.uid);
+    });
+    meleeFoesByUid.forEach((list) => list.sort());
+
+    pendingPairs.forEach(pair => {
+        if (meleePairsDone.has(pair.key)) return;
+        if (!partyIsAlive(pair.a) || !partyIsAlive(pair.b)) return;
+        if (manhattan(pair.a, pair.b) !== 1) return;
+        meleePairsDone.add(pair.key);
+
+        const foesA = meleeFoesByUid.get(pair.a.uid) || [pair.b.uid];
+        const foesB = meleeFoesByUid.get(pair.b.uid) || [pair.a.uid];
+        pair.foeIndexA = Math.max(0, foesA.indexOf(pair.b.uid));
+        pair.foeIndexB = Math.max(0, foesB.indexOf(pair.a.uid));
+
+        const meta = combatWindowMeta(pair.a, pair.b);
+        const result = resolveMeleePairTheatre(pair, roundLog, foesA.length, foesB.length);
+        roundLog = result.roundLog;
+        if (result.waves.length) {
+            combats.push({
+                kind: 'melee',
+                score: pair.score,
+                ...meta,
+                waves: result.waves
+            });
+        }
+    });
+
+    return { hasCombat: combats.length > 0, roundLog, combats };
 }
 
 function snapshotGroundBooks() {
@@ -802,230 +1216,6 @@ function stopPlansEngagedWithEnemy(plans, fromStepIndex, roundLog) {
         truncatePlanFromStep(plan, fromStepIndex);
     });
     return roundLog;
-}
-
-// Temporary snippet — will be applied into server.js via patch script.
-// After one move step: collect ranged pair-fights, then melee pair-fights.
-// Sequence: all ranged (by Seek=3/Advance=2/March=1 pair score), then all melee (same scoring).
-// Returns combats[] for the client timeline (0.5s pause per fight, 0.5s per damage wave).
-function resolveStepCombat(meleePairsDone, rangedDone, roundLog) {
-    const combats = [];
-
-    // --- Pre-compute ranged hits (each party shoots at most once this turn) ---
-    const rangedHitsByPair = new Map();
-    INITIATIVE_BANDS.forEach(bandName => {
-        const attackers = arenaParties.filter(ap => ap.order === bandName && partyIsAlive(ap));
-        attackers.forEach(attacker => {
-            if (rangedDone.has(attacker.uid)) return;
-            const rangedPower = getRangedPower(attacker.members, attacker.order);
-            if (rangedPower <= 0) return;
-            // Only shoot targets this faction can see (no firing into your own fog).
-            const rangedTargets = arenaParties.filter(e =>
-                e.faction !== attacker.faction
-                && partyIsAlive(e)
-                && manhattan(attacker, e) === 2
-                && attackerCanSeeTarget(attacker, e)
-            );
-            if (!rangedTargets.length) return;
-
-            rangedDone.add(attacker.uid);
-            const shares = splitDamageEvenly(rangedPower, rangedTargets.length);
-            rangedTargets.forEach((target, idx) => {
-                const share = shares[idx];
-                const modified = applyRangedDefenceModifier(share, target);
-                const coverNote = rangedDefenceLabel(target);
-                if (coverNote && share > 0) {
-                    roundLog += ` -> ${attacker.name} ranged vs ${target.name}: ${share} -> ${modified} after ${coverNote}<br>`;
-                }
-                const key = meleePairKey(attacker, target);
-                if (!rangedHitsByPair.has(key)) {
-                    rangedHitsByPair.set(key, {
-                        key,
-                        score: combatPairScore(attacker, target),
-                        hits: []
-                    });
-                }
-                rangedHitsByPair.get(key).hits.push({
-                    attacker,
-                    target,
-                    damage: modified,
-                    init: INITIATIVE_ORDER[attacker.order] || 2
-                });
-            });
-        });
-    });
-
-    const rangedPairs = Array.from(rangedHitsByPair.values());
-    sortCombatPairsByScore(rangedPairs);
-
-    rangedPairs.forEach(pair => {
-        pair.hits.sort((h1, h2) => {
-            if (h1.init !== h2.init) return h1.init - h2.init;
-            return String(h1.attacker.uid).localeCompare(String(h2.attacker.uid));
-        });
-
-        const waves = [];
-        let i = 0;
-        while (i < pair.hits.length) {
-            const batch = [pair.hits[i]];
-            while (i + 1 < pair.hits.length && pair.hits[i + 1].init === pair.hits[i].init) {
-                i += 1;
-                batch.push(pair.hits[i]);
-            }
-            i += 1;
-
-            // Same-initiative shots in one wave: apply all, then one shared snapshot.
-            const ready = batch.filter(hit =>
-                partyIsAlive(hit.attacker)
-                && partyIsAlive(hit.target)
-                && attackerCanSeeTarget(hit.attacker, hit.target)
-            );
-            const floats = [];
-            ready.forEach(hit => {
-                const label = `${hit.attacker.name} ranged vs ${hit.target.name}`;
-                roundLog += `[${label}] ${hit.damage} dmg<br>`;
-                applySpilloverDamage(hit.target.members, hit.damage, (str) => { roundLog += str; }, label);
-                floats.push({
-                    targetUid: hit.target.uid,
-                    damage: hit.damage,
-                    attackerFaction: hit.attacker.faction,
-                    kind: 'ranged'
-                });
-            });
-            if (!floats.length) continue;
-            roundLog = dropBooksFromKnockouts(roundLog);
-            waves.push({
-                floats,
-                arenaParties: publicArenaParties(),
-                groundBooks: snapshotGroundBooks()
-            });
-        }
-        if (waves.length) {
-            combats.push({ kind: 'ranged', score: pair.score, waves });
-        }
-    });
-
-    // --- Melee pairs (each pair once per turn) ---
-    const pendingPairs = [];
-    const living = arenaParties.filter(ap => partyIsAlive(ap));
-    for (let li = 0; li < living.length; li++) {
-        for (let lj = li + 1; lj < living.length; lj++) {
-            const a = living[li];
-            const b = living[lj];
-            if (a.faction === b.faction) continue;
-            if (manhattan(a, b) !== 1) continue;
-            const key = meleePairKey(a, b);
-            if (meleePairsDone.has(key)) continue;
-            pendingPairs.push({
-                a,
-                b,
-                key,
-                score: combatPairScore(a, b)
-            });
-        }
-    }
-
-    sortCombatPairsByScore(pendingPairs);
-
-    const meleeShareByEdge = new Map();
-    living.forEach(attacker => {
-        const targets = pendingPairs
-            .filter(p => p.a.uid === attacker.uid || p.b.uid === attacker.uid)
-            .map(p => (p.a.uid === attacker.uid ? p.b : p.a))
-            .filter(t => partyIsAlive(t));
-        if (!targets.length) return;
-        const shares = splitDamageEvenly(getMeleePower(attacker.members), targets.length);
-        targets.forEach((t, idx) => {
-            meleeShareByEdge.set(`${attacker.uid}>${t.uid}`, shares[idx]);
-        });
-    });
-
-    function meleeShare(attacker, target) {
-        return meleeShareByEdge.get(`${attacker.uid}>${target.uid}`) || 0;
-    }
-
-    pendingPairs.forEach(pair => {
-        if (meleePairsDone.has(pair.key)) return;
-        if (!partyIsAlive(pair.a) || !partyIsAlive(pair.b)) return;
-        if (manhattan(pair.a, pair.b) !== 1) return;
-
-        meleePairsDone.add(pair.key);
-        const waves = [];
-        const initA = INITIATIVE_ORDER[pair.a.order] || 2;
-        const initB = INITIATIVE_ORDER[pair.b.order] || 2;
-
-        if (initA === initB) {
-            // True simultaneous: both strikes use pre-strike power, then one float wave.
-            // Each side only hits if they can see the other (fog blocks return damage).
-            const floats = [];
-            if (attackerCanSeeTarget(pair.a, pair.b)) {
-                const dmgToB = meleeShare(pair.a, pair.b);
-                const labelAB = `${pair.a.name} melee vs ${pair.b.name}`;
-                roundLog += `[${labelAB}] ${dmgToB} dmg<br>`;
-                applySpilloverDamage(pair.b.members, dmgToB, (str) => { roundLog += str; }, labelAB);
-                floats.push({
-                    targetUid: pair.b.uid, damage: dmgToB,
-                    attackerFaction: pair.a.faction, kind: 'melee'
-                });
-            } else {
-                roundLog += ` -> ${pair.a.name} cannot melee-attack ${pair.b.name} (target hidden in fog).<br>`;
-            }
-            if (attackerCanSeeTarget(pair.b, pair.a)) {
-                const dmgToA = meleeShare(pair.b, pair.a);
-                const labelBA = `${pair.b.name} melee vs ${pair.a.name}`;
-                roundLog += `[${labelBA}] ${dmgToA} dmg<br>`;
-                applySpilloverDamage(pair.a.members, dmgToA, (str) => { roundLog += str; }, labelBA);
-                floats.push({
-                    targetUid: pair.a.uid, damage: dmgToA,
-                    attackerFaction: pair.b.faction, kind: 'melee'
-                });
-            } else {
-                roundLog += ` -> ${pair.b.name} cannot melee-attack ${pair.a.name} (target hidden in fog).<br>`;
-            }
-            if (floats.length) {
-                roundLog = dropBooksFromKnockouts(roundLog);
-                waves.push({
-                    floats,
-                    arenaParties: publicArenaParties(),
-                    groundBooks: snapshotGroundBooks()
-                });
-            }
-        } else {
-            const first = initA < initB ? pair.a : pair.b;
-            const second = initA < initB ? pair.b : pair.a;
-            const dmg = Math.floor(meleeShare(first, second) * 1.2);
-            const hit1 = applyCombatHitForTimeline(first, second, dmg, 'melee', roundLog);
-            roundLog = hit1.roundLog;
-            if (hit1.float) {
-                roundLog += ` -> (+20% surprise on ${first.name}'s strike)<br>`;
-                waves.push({
-                    floats: [hit1.float],
-                    arenaParties: hit1.arenaParties,
-                    groundBooks: hit1.groundBooks
-                });
-            }
-
-            // Counter only if still alive/adjacent AND the counter-attacker can see the foe.
-            if (partyIsAlive(second) && partyIsAlive(first) && manhattan(first, second) === 1) {
-                const counter = getMeleePower(second.members);
-                const hit2 = applyCombatHitForTimeline(second, first, counter, 'melee', roundLog);
-                roundLog = hit2.roundLog;
-                if (hit2.float) {
-                    waves.push({
-                        floats: [hit2.float],
-                        arenaParties: hit2.arenaParties,
-                        groundBooks: hit2.groundBooks
-                    });
-                }
-            }
-        }
-
-        if (waves.length) {
-            combats.push({ kind: 'melee', score: pair.score, waves });
-        }
-    });
-
-    return { hasCombat: combats.length > 0, roundLog, combats };
 }
 
 // Step-by-step movement: everyone advances one square together, then combat checks,
@@ -1155,8 +1345,24 @@ function resolveSteppedMovementAndCombat(roundLog) {
         // Combat after each move step; also once when nobody moved (step 0 only).
         let combats = [];
         if (isMoveStep || movementSteps === 0) {
+            // Ranged only if this party has no further path left (finished moving this turn).
+            const finishedMoveUids = new Set();
+            plans.forEach(plan => {
+                if (!partyIsAlive(plan.ap)) return;
+                // path.length <= step+1 → no cells remain after this step (holds count as finished).
+                if (plan.path.length <= step + 1) finishedMoveUids.add(plan.ap.uid);
+            });
+            // Hold-only round: everyone is "finished" (no one is mid-path).
+            if (movementSteps === 0) {
+                arenaParties.forEach(ap => {
+                    if (partyIsAlive(ap)) finishedMoveUids.add(ap.uid);
+                });
+            }
+
             roundLog += `<br>⚔ After step ${isMoveStep ? step + 1 : 0}<br>`;
-            const combatResult = resolveStepCombat(meleePairsDone, rangedDone, roundLog);
+            const combatResult = resolveStepCombat(
+                meleePairsDone, rangedDone, roundLog, finishedMoveUids
+            );
             combats = combatResult.combats || [];
             roundLog = combatResult.roundLog;
             if (!combats.length) roundLog += ' -> No engagements.<br>';
