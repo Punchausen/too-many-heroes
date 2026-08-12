@@ -130,19 +130,19 @@ const ARENA_TILE_MAP = [
     ['DG','DG','LGY','DG','LG','DG','DG','LG','LG','LG','LG'],
     ['DG','DG','LG','LG','LG','DG','DG','LG','LG','LG','LG']
 ];
-// Fixed grass art for LG and DG (1–7 → grass_N.png). 0 = no grass image.
+// Fixed grass art for LG, DG, and mountain (LGY) floors (1–7 → grass_N.png). 0 = no grass.
 // Same layout for both players — like ARENA_TILE_MAP, not rolled per session.
 // No two matching variants share an up/down/left/right edge.
 const GRASS_VARIANT_MAP = [
     [6, 1, 3, 5, 6, 4, 5, 4, 2, 4, 3],
-    [1, 2, 7, 1, 5, 1, 3, 6, 0, 6, 2],
-    [2, 0, 0, 3, 4, 2, 7, 0, 0, 7, 4],
+    [1, 2, 7, 1, 5, 1, 3, 6, 1, 6, 2],
+    [2, 0, 0, 3, 4, 2, 7, 1, 4, 7, 4],
     [3, 7, 0, 5, 7, 4, 5, 6, 3, 1, 2],
     [4, 5, 0, 1, 2, 7, 3, 2, 6, 5, 7],
     [5, 1, 0, 0, 0, 0, 0, 0, 0, 6, 4],
     [3, 7, 3, 4, 1, 5, 1, 3, 0, 3, 5],
-    [7, 2, 0, 0, 6, 1, 6, 7, 0, 0, 3],
-    [2, 7, 0, 7, 2, 5, 4, 2, 3, 6, 2],
+    [7, 2, 7, 1, 6, 1, 6, 7, 0, 0, 3],
+    [2, 7, 4, 7, 2, 5, 4, 2, 3, 6, 2],
     [5, 6, 1, 5, 7, 4, 3, 4, 1, 3, 5]
 ];
 // Fixed tree art on forest (DG) tiles (1–3 → tree_N.png). 0 = not forest.
@@ -159,34 +159,63 @@ const TREE_VARIANT_MAP = [
     [2, 1, 0, 1, 0, 3, 2, 0, 0, 0, 0],
     [3, 2, 0, 0, 0, 1, 3, 0, 0, 0, 0]
 ];
-// Fixed upward nudge per forest tree (fraction of tile height, 5%–10%).
+// Fixed upward nudge per forest tree (fraction of tile height, 15%–25%).
 // Same for both players — keeps trunks from sitting flush on the tile edge.
 const TREE_LIFT_MAP = [
-    [0, 0, 0, 0, 0.06, 0.08, 0, 0, 0, 0.08, 0.06],
-    [0, 0, 0, 0, 0.08, 0.05, 0, 0, 0, 0.05, 0.07],
+    [0, 0, 0, 0, 0.23, 0.19, 0, 0, 0, 0.19, 0.19],
+    [0, 0, 0, 0, 0.24, 0.16, 0, 0, 0, 0.16, 0.19],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0.08, 0, 0, 0.05, 0.07, 0, 0, 0, 0, 0, 0],
-    [0.07, 0, 0, 0, 0, 0, 0.07, 0.07, 0.09, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.08],
-    [0, 0, 0, 0, 0, 0.06, 0.07, 0.09, 0, 0, 0.08],
+    [0.25, 0, 0, 0.19, 0.25, 0, 0, 0, 0, 0, 0],
+    [0.18, 0, 0, 0, 0, 0, 0.33, 0.38, 0.31, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.15],
+    [0, 0, 0, 0, 0, 0.19, 0.18, 0.18, 0, 0, 0.19],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0.09, 0.06, 0, 0.06, 0, 0.06, 0.07, 0, 0, 0, 0],
-    [0.05, 0.10, 0, 0, 0, 0.06, 0.06, 0, 0, 0, 0]
+    [0.20, 0.19, 0, 0.18, 0, 0.18, 0.17, 0, 0, 0, 0],
+    [0.20, 0.21, 0, 0, 0, 0.21, 0.17, 0, 0, 0, 0]
 ];
-// Fixed road art on DGY (1–3 → road_N.png). 0 = not a road cell.
-// No matching variants on orthogonal road neighbours. (Wizard towers stay solid colour for now.)
+// Fixed rock art on mountain (LGY) tiles (1–3 → rock_N.png). 0 = not mountain.
+// Each mountain cluster of 3 uses one of each rock type (fixed shuffle per cluster).
+const ROCK_VARIANT_MAP = [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+];
+// Fixed upward nudge per mountain rock (fraction of tile height, 10%–20%).
+const ROCK_LIFT_MAP = [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0.19, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0.10, 0.12, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0.13, 0.19, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0.11, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+];
+// Fixed road art on DGY + wizard-tower (RED) cells (1–3 → road_N.png). 0 = neither.
+// No matching variants on orthogonal road/tower neighbours.
 const ROAD_VARIANT_MAP = [
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0],
     [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 3, 2, 1, 3, 2, 1, 3, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0],
+    [0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 3, 2, 1, 2, 3, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ];
+// Wizard towers sit this fraction of a tile up from the bottom (width = one tile).
+const TOWER_LIFT_FRAC = 0.20;
 // Mountains and Buildings cannot be walked on (preview only — server enforces for real).
 const BLOCKED_TILES = { RED: true, LGY: true };
 
@@ -503,8 +532,8 @@ function drawForestTreeAt(tileX, tileY, fogged) {
     const cy = ARENA_GRID.offsetY + (tileY * size);
     const drawW = size;
     const drawH = size * (img.naturalHeight / img.naturalWidth);
-    // Lift trunk slightly off the bottom edge (fixed 5%–10% of tile height per tree).
-    const liftFrac = (TREE_LIFT_MAP[tileY] && TREE_LIFT_MAP[tileY][tileX]) || 0.05;
+    // Lift trunk off the bottom edge (fixed 15%–25% of tile height per tree).
+    const liftFrac = (TREE_LIFT_MAP[tileY] && TREE_LIFT_MAP[tileY][tileX]) || 0.15;
     const dx = cx;
     const dy = cy + size - drawH - (liftFrac * size);
 
@@ -512,6 +541,137 @@ function drawForestTreeAt(tileX, tileY, fogged) {
         const foggedTree = getFoggedTreeCanvas(variant, drawW, drawH);
         if (foggedTree) {
             ctx.drawImage(foggedTree, dx, dy);
+            return;
+        }
+    }
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
+// Wizard tower sprites (visual only). Same scale/overlap/fog rules as trees.
+const towerImgCache = {};
+const towerFogCache = {};
+
+function getCachedTowerImage(team) {
+    // team: 'blue' (p1 / left) or 'red' (p2 / right)
+    if (team !== 'blue' && team !== 'red') return null;
+    if (towerImgCache[team]) return towerImgCache[team];
+    const img = new Image();
+    img.src = `assets/tiles/wizard_tower_${team}.png`;
+    towerImgCache[team] = img;
+    return img;
+}
+
+function preloadTowerTiles() {
+    getCachedTowerImage('blue');
+    getCachedTowerImage('red');
+}
+
+function getFoggedTowerCanvas(team, drawW, drawH) {
+    const key = `${team}_${drawW}x${drawH}`;
+    if (towerFogCache[key]) return towerFogCache[key];
+
+    const img = getCachedTowerImage(team);
+    if (!img || !img.complete || img.naturalWidth <= 0) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(drawW));
+    canvas.height = Math.max(1, Math.ceil(drawH));
+    const tctx = canvas.getContext('2d');
+    tctx.drawImage(img, 0, 0, drawW, drawH);
+    tctx.globalCompositeOperation = 'source-atop';
+    tctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    tctx.fillRect(0, 0, canvas.width, canvas.height);
+    tctx.globalCompositeOperation = 'source-over';
+
+    towerFogCache[key] = canvas;
+    return canvas;
+}
+
+// Draw wizard tower: width = tile, base 20% up from tile bottom (overlaps tile above).
+function drawWizardTowerAt(tileX, tileY, team, fogged) {
+    const img = getCachedTowerImage(team);
+    if (!img || !img.complete || img.naturalWidth <= 0) return;
+
+    const size = ARENA_GRID.cellSize;
+    const cx = ARENA_GRID.offsetX + (tileX * size);
+    const cy = ARENA_GRID.offsetY + (tileY * size);
+    const drawW = size;
+    const drawH = size * (img.naturalHeight / img.naturalWidth);
+    const dx = cx;
+    const dy = cy + size - drawH - (TOWER_LIFT_FRAC * size);
+
+    if (fogged) {
+        const foggedTower = getFoggedTowerCanvas(team, drawW, drawH);
+        if (foggedTower) {
+            ctx.drawImage(foggedTower, dx, dy);
+            return;
+        }
+    }
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
+// Tall props (trees / rocks / towers) split party draw into behind vs in-front bands.
+function tileHasTallProp(tileCode) {
+    return tileCode === 'DG' || tileCode === 'RED' || tileCode === 'LGY';
+}
+
+// Mountain rock sprites (visual only). Same scale/overlap/fog rules as trees.
+const rockTileImgCache = {};
+const rockTileFogCache = {};
+
+function getCachedRockTile(variant) {
+    if (!variant || variant < 1 || variant > 3) return null;
+    if (rockTileImgCache[variant]) return rockTileImgCache[variant];
+    const img = new Image();
+    img.src = `assets/tiles/rock_${variant}.png`;
+    rockTileImgCache[variant] = img;
+    return img;
+}
+
+function preloadRockTiles() {
+    for (let v = 1; v <= 3; v++) getCachedRockTile(v);
+}
+
+function getFoggedRockCanvas(variant, drawW, drawH) {
+    const key = `${variant}_${drawW}x${drawH}`;
+    if (rockTileFogCache[key]) return rockTileFogCache[key];
+
+    const img = getCachedRockTile(variant);
+    if (!img || !img.complete || img.naturalWidth <= 0) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(drawW));
+    canvas.height = Math.max(1, Math.ceil(drawH));
+    const tctx = canvas.getContext('2d');
+    tctx.drawImage(img, 0, 0, drawW, drawH);
+    tctx.globalCompositeOperation = 'source-atop';
+    tctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    tctx.fillRect(0, 0, canvas.width, canvas.height);
+    tctx.globalCompositeOperation = 'source-over';
+
+    rockTileFogCache[key] = canvas;
+    return canvas;
+}
+
+// Draw a mountain rock bottom-aligned on its tile (overlaps the tile above).
+function drawMountainRockAt(tileX, tileY, fogged) {
+    const variant = ROCK_VARIANT_MAP[tileY] && ROCK_VARIANT_MAP[tileY][tileX];
+    const img = getCachedRockTile(variant);
+    if (!img || !img.complete || img.naturalWidth <= 0) return;
+
+    const size = ARENA_GRID.cellSize;
+    const cx = ARENA_GRID.offsetX + (tileX * size);
+    const cy = ARENA_GRID.offsetY + (tileY * size);
+    const drawW = size;
+    const drawH = size * (img.naturalHeight / img.naturalWidth);
+    const liftFrac = (ROCK_LIFT_MAP[tileY] && ROCK_LIFT_MAP[tileY][tileX]) || 0.10;
+    const dx = cx;
+    const dy = cy + size - drawH - (liftFrac * size);
+
+    if (fogged) {
+        const foggedRock = getFoggedRockCanvas(variant, drawW, drawH);
+        if (foggedRock) {
+            ctx.drawImage(foggedRock, dx, dy);
             return;
         }
     }
@@ -545,7 +705,7 @@ function preloadRoadAndVergeTiles() {
     for (let v = 1; v <= 6; v++) getCachedVergeTile(v);
 }
 
-// Roads + wizard towers both count as "road" for verge neighbours (towers keep solid colour for now).
+// Roads + wizard towers both count as "road" for verge neighbours.
 function isClientRoadLike(x, y) {
     const t = getClientTileAt(x, y);
     return t === 'DGY' || t === 'RED';
@@ -1260,11 +1420,21 @@ function isTileOccupiedByLiving(x, y, skipUid) {
 }
 
 // Thick outline around the outer edge of the local player's deploy zone (team colour).
-function drawDeploymentBoundary(faction) {
+// Edges that touch the wizard tower itself are skipped so the tower tile isn't outlined.
+// band: 'behind' | 'front' — matches hero layering on tall-prop tiles (top behind, bottom in front).
+// onlyRow: if set, only draw edges for deploy cells on that row (used inside the prop pass).
+function drawDeploymentBoundary(faction, band, onlyRow) {
     const cells = getClientDeployCells(faction);
     if (!cells.length) return;
     const set = new Set(cells.map(c => `${c.x},${c.y}`));
+    const anchors = findClientBuildingAnchors();
+    const tower = faction === 'p1' ? anchors.left : anchors.right;
     const size = ARENA_GRID.cellSize;
+    const mid = size / 2;
+
+    function isTowerAt(x, y) {
+        return !!(tower && tower.x === x && tower.y === y);
+    }
 
     ctx.save();
     ctx.strokeStyle = getTeamColor(faction);
@@ -1272,19 +1442,55 @@ function drawDeploymentBoundary(faction) {
     ctx.lineJoin = 'miter';
 
     cells.forEach(c => {
+        if (onlyRow !== undefined && c.y !== onlyRow) return;
+
         const cx = ARENA_GRID.offsetX + (c.x * size);
         const cy = ARENA_GRID.offsetY + (c.y * size);
-        if (!set.has(`${c.x},${c.y - 1}`)) {
-            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + size, cy); ctx.stroke();
+        const onProp = tileHasTallProp(getClientTileAt(c.x, c.y));
+        const needTop = !set.has(`${c.x},${c.y - 1}`) && !isTowerAt(c.x, c.y - 1);
+        const needBottom = !set.has(`${c.x},${c.y + 1}`) && !isTowerAt(c.x, c.y + 1);
+        const needLeft = !set.has(`${c.x - 1},${c.y}`) && !isTowerAt(c.x - 1, c.y);
+        const needRight = !set.has(`${c.x + 1},${c.y}`) && !isTowerAt(c.x + 1, c.y);
+
+        if (!onProp) {
+            // Flat tiles: whole outline draws in the behind pass (props below can cover it).
+            if (band !== 'behind') return;
+            if (needTop) {
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + size, cy); ctx.stroke();
+            }
+            if (needBottom) {
+                ctx.beginPath(); ctx.moveTo(cx, cy + size); ctx.lineTo(cx + size, cy + size); ctx.stroke();
+            }
+            if (needLeft) {
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy + size); ctx.stroke();
+            }
+            if (needRight) {
+                ctx.beginPath(); ctx.moveTo(cx + size, cy); ctx.lineTo(cx + size, cy + size); ctx.stroke();
+            }
+            return;
         }
-        if (!set.has(`${c.x},${c.y + 1}`)) {
-            ctx.beginPath(); ctx.moveTo(cx, cy + size); ctx.lineTo(cx + size, cy + size); ctx.stroke();
-        }
-        if (!set.has(`${c.x - 1},${c.y}`)) {
-            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy + size); ctx.stroke();
-        }
-        if (!set.has(`${c.x + 1},${c.y}`)) {
-            ctx.beginPath(); ctx.moveTo(cx + size, cy); ctx.lineTo(cx + size, cy + size); ctx.stroke();
+
+        // Tall-prop tiles: top half behind the prop, bottom half in front (same idea as heroes).
+        if (band === 'behind') {
+            if (needTop) {
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + size, cy); ctx.stroke();
+            }
+            if (needLeft) {
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy + mid); ctx.stroke();
+            }
+            if (needRight) {
+                ctx.beginPath(); ctx.moveTo(cx + size, cy); ctx.lineTo(cx + size, cy + mid); ctx.stroke();
+            }
+        } else if (band === 'front') {
+            if (needBottom) {
+                ctx.beginPath(); ctx.moveTo(cx, cy + size); ctx.lineTo(cx + size, cy + size); ctx.stroke();
+            }
+            if (needLeft) {
+                ctx.beginPath(); ctx.moveTo(cx, cy + mid); ctx.lineTo(cx, cy + size); ctx.stroke();
+            }
+            if (needRight) {
+                ctx.beginPath(); ctx.moveTo(cx + size, cy + mid); ctx.lineTo(cx + size, cy + size); ctx.stroke();
+            }
         }
     });
     ctx.restore();
@@ -1691,29 +1897,26 @@ function drawArenaScreen() {
             const fogged = !isTileVisible(visibleTiles, x, y);
 
             let fill = ARENA_TILE_COLORS[tile] || ARENA_TILE_COLORS.LG;
-            if (tile === 'RED') {
-                if (buildingAnchors.left && buildingAnchors.left.x === x && buildingAnchors.left.y === y) {
-                    fill = TEAM_COLORS.p1; // leftmost home = Blue
-                } else if (buildingAnchors.right && buildingAnchors.right.x === x && buildingAnchors.right.y === y) {
-                    fill = TEAM_COLORS.p2; // rightmost home = Red
-                }
-            }
             // Light grass (LG) and forest floor (DG) use fixed grass images.
             // Flat fill first so we still see colour while images load.
             ctx.fillStyle = fill;
             ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
-            if (tile === 'LG' || tile === 'DG') {
+            if (tile === 'LG' || tile === 'DG' || tile === 'LGY') {
                 const variant = GRASS_VARIANT_MAP[y][x];
                 const grassImg = getCachedGrassTile(variant);
                 if (grassImg && grassImg.complete && grassImg.naturalWidth > 0) {
                     ctx.drawImage(grassImg, cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
                 }
                 // Verge sits on grass (and under trees/parties later): soft road edge facing neighbours.
-                const vergeLayers = getVergeLayersForGrass(x, y);
-                for (let i = 0; i < vergeLayers.length; i++) {
-                    drawVergeLayer(cx, cy, ARENA_GRID.cellSize, vergeLayers[i]);
+                // Mountains aren't next to roads today, but the helper no-ops when unused.
+                if (tile === 'LG' || tile === 'DG') {
+                    const vergeLayers = getVergeLayersForGrass(x, y);
+                    for (let i = 0; i < vergeLayers.length; i++) {
+                        drawVergeLayer(cx, cy, ARENA_GRID.cellSize, vergeLayers[i]);
+                    }
                 }
-            } else if (tile === 'DGY') {
+            } else if (tile === 'DGY' || tile === 'RED') {
+                // Roads and tower footprints share road art (tower sprite is drawn later).
                 const roadVariant = ROAD_VARIANT_MAP[y][x];
                 const roadImg = getCachedRoadTile(roadVariant);
                 if (roadImg && roadImg.complete && roadImg.naturalWidth > 0) {
@@ -1773,12 +1976,12 @@ function drawArenaScreen() {
         drawSpellBookIcon(cx, cy, book.ownerFaction);
     });
 
-    // --- Parties + trees (row by row, top → bottom) ---
-    // Forest trees are bottom-aligned and overlap the tile above. Draw order per row:
-    //   1) top-row heroes on forest tiles (behind their tree)
-    //   2) full party on non-forest tiles (so a tree below can cover them)
-    //   3) trees on this row (covers tile above + top heroes here; lower trees cover upper trees)
-    //   4) bottom-row heroes on forest (in front of their own tree)
+    // --- Parties + tall props (trees / towers), row by row, top → bottom ---
+    // Props are bottom-aligned and overlap the tile above. Draw order per row:
+    //   1) top-row heroes on prop tiles (behind their tree/tower)
+    //   2) full party on non-prop tiles (so a prop below can cover them)
+    //   3) trees + towers on this row (covers tile above; lower props cover upper ones)
+    //   4) bottom-row heroes on prop tiles (in front of their own prop)
     const partiesByRow = {};
     arenaParties.forEach(ap => {
         if (typeof ap.x !== 'number' || typeof ap.y !== 'number') return;
@@ -1804,45 +2007,67 @@ function drawArenaScreen() {
         );
     }
 
+    const drawDeploy = arenaPhase === 'DEPLOYMENT' && (myFaction === 'p1' || myFaction === 'p2');
+
     for (let y = 0; y < ARENA_GRID.height; y++) {
         const rowParties = partiesByRow[y] || [];
 
-        // 1) Forest: top heroes only (corners 0–1), behind the tree
+        // 1) Prop tiles: top heroes only (corners 0–1), behind the tree/tower
         rowParties.forEach(({ ap, drawTile }) => {
             const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
-            if (tileCode !== 'DG') return;
+            if (!tileHasTallProp(tileCode)) return;
             const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
             const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
             drawPartySpritesOnTile(ap, px, py, 'top');
-            // Carried book sits near the top of the tile → also behind the canopy
+            // Carried book sits near the top of the tile → also behind the prop
             drawCarriedBookFor(ap, px, py);
         });
 
-        // 2) Non-forest parties fully (a forest tree in the row below will cover them)
+        // 2) Non-prop parties fully (a tall prop in the row below will cover them)
         rowParties.forEach(({ ap, drawTile }) => {
             const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
-            if (tileCode === 'DG') return;
+            if (tileHasTallProp(tileCode)) return;
             const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
             const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
             drawPartySpritesOnTile(ap, px, py, 'all');
             drawCarriedBookFor(ap, px, py);
         });
 
-        // 3) Trees on this forest row (fog matches the forest tile the tree sits in)
+        // 2b) Deploy outline behind props on this row (and full outline on flat tiles)
+        if (drawDeploy) drawDeploymentBoundary(myFaction, 'behind', y);
+
+        // 3) Tall props on this row (fog matches the tile they sit in)
         for (let x = 0; x < ARENA_GRID.width; x++) {
-            if (ARENA_TILE_MAP[y][x] !== 'DG') continue;
+            const tileCode = ARENA_TILE_MAP[y][x];
             const fogged = !isTileVisible(visibleTiles, x, y);
-            drawForestTreeAt(x, y, fogged);
+            if (tileCode === 'DG') {
+                drawForestTreeAt(x, y, fogged);
+            } else if (tileCode === 'LGY') {
+                drawMountainRockAt(x, y, fogged);
+            } else if (tileCode === 'RED') {
+                let team = 'blue';
+                if (buildingAnchors.right && buildingAnchors.right.x === x && buildingAnchors.right.y === y) {
+                    team = 'red';
+                } else if (buildingAnchors.left && buildingAnchors.left.x === x && buildingAnchors.left.y === y) {
+                    team = 'blue';
+                } else if (x > ARENA_GRID.width / 2) {
+                    team = 'red'; // fallback if anchors missing
+                }
+                drawWizardTowerAt(x, y, team, fogged);
+            }
         }
 
-        // 4) Forest: bottom heroes (corners 2–3), in front of their own tree
+        // 4) Prop tiles: bottom heroes (corners 2–3), in front of their own prop
         rowParties.forEach(({ ap, drawTile }) => {
             const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
-            if (tileCode !== 'DG') return;
+            if (!tileHasTallProp(tileCode)) return;
             const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
             const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
             drawPartySpritesOnTile(ap, px, py, 'bottom');
         });
+
+        // 4b) Deploy outline in front of props on this row (bottom half only)
+        if (drawDeploy) drawDeploymentBoundary(myFaction, 'front', y);
     }
 
     // Outline on the selected living party's tile (deployment AND combat).
@@ -1855,11 +2080,6 @@ function drawArenaScreen() {
         ctx.lineWidth = 2;
         ctx.strokeRect(cx + 1, cy + 1, ARENA_GRID.cellSize - 2, ARENA_GRID.cellSize - 2);
         ctx.restore();
-    }
-
-    // Deploy boundary in your team colour during deployment.
-    if (arenaPhase === 'DEPLOYMENT' && (myFaction === 'p1' || myFaction === 'p2')) {
-        drawDeploymentBoundary(myFaction);
     }
 
 }
@@ -1884,7 +2104,9 @@ function loadGameAssets() {
     preloadArenaPortraits();
     preloadGrassTiles();
     preloadTreeTiles();
+    preloadRockTiles();
     preloadRoadAndVergeTiles();
+    preloadTowerTiles();
     startGameLoop();
     switchScreen('LANDING');
 }
