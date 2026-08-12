@@ -122,13 +122,56 @@ const ARENA_TILE_MAP = [
     ['LG','LG','LG','LG','DG','DG','LG','LG','LG','DG','DG'],
     ['LG','LG','LG','LG','DG','DG','LG','LG','LGY','DG','DG'],
     ['LG','RED','DGY','LG','LG','LG','LG','LGY','LGY','LG','LG'],
-    ['DG','LG','DGY','DG','DG','LG','LG','LG','LGY','LG','LG'],
+    ['DG','LG','DGY','DG','DG','LG','LG','LG','LG','LG','LG'],
     ['DG','LG','DGY','LG','LG','LG','DG','DG','DG','LG','LG'],
     ['LG','LG','DGY','DGY','DGY','DGY','DGY','DGY','DGY','LG','DG'],
     ['LG','LG','LG','LG','LG','DG','DG','DG','DGY','LG','DG'],
     ['LG','LG','LGY','LGY','LG','LG','LG','LG','DGY','RED','LG'],
     ['DG','DG','LGY','DG','LG','DG','DG','LG','LG','LG','LG'],
     ['DG','DG','LG','LG','LG','DG','DG','LG','LG','LG','LG']
+];
+// Fixed grass art for LG and DG (1–7 → grass_N.png). 0 = no grass image.
+// Same layout for both players — like ARENA_TILE_MAP, not rolled per session.
+// No two matching variants share an up/down/left/right edge.
+const GRASS_VARIANT_MAP = [
+    [6, 1, 3, 5, 6, 4, 5, 4, 2, 4, 3],
+    [1, 2, 7, 1, 5, 1, 3, 6, 0, 6, 2],
+    [2, 0, 0, 3, 4, 2, 7, 0, 0, 7, 4],
+    [3, 7, 0, 5, 7, 4, 5, 6, 3, 1, 2],
+    [4, 5, 0, 1, 2, 7, 3, 2, 6, 5, 7],
+    [5, 1, 0, 0, 0, 0, 0, 0, 0, 6, 4],
+    [3, 7, 3, 4, 1, 5, 1, 3, 0, 3, 5],
+    [7, 2, 0, 0, 6, 1, 6, 7, 0, 0, 3],
+    [2, 7, 0, 7, 2, 5, 4, 2, 3, 6, 2],
+    [5, 6, 1, 5, 7, 4, 3, 4, 1, 3, 5]
+];
+// Fixed tree art on forest (DG) tiles (1–3 → tree_N.png). 0 = not forest.
+// No matching trees on orthogonal forest neighbours; lower trees draw on top of upper ones.
+const TREE_VARIANT_MAP = [
+    [0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 3],
+    [0, 0, 0, 0, 2, 1, 0, 0, 0, 2, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [2, 0, 0, 2, 3, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 3, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 1, 2, 3, 0, 0, 2],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [2, 1, 0, 1, 0, 3, 2, 0, 0, 0, 0],
+    [3, 2, 0, 0, 0, 1, 3, 0, 0, 0, 0]
+];
+// Fixed upward nudge per forest tree (fraction of tile height, 5%–10%).
+// Same for both players — keeps trunks from sitting flush on the tile edge.
+const TREE_LIFT_MAP = [
+    [0, 0, 0, 0, 0.06, 0.08, 0, 0, 0, 0.08, 0.06],
+    [0, 0, 0, 0, 0.08, 0.05, 0, 0, 0, 0.05, 0.07],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0.08, 0, 0, 0.05, 0.07, 0, 0, 0, 0, 0, 0],
+    [0.07, 0, 0, 0, 0, 0, 0.07, 0.07, 0.09, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.08],
+    [0, 0, 0, 0, 0, 0.06, 0.07, 0.09, 0, 0, 0.08],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0.09, 0.06, 0, 0.06, 0, 0.06, 0.07, 0, 0, 0, 0],
+    [0.05, 0.10, 0, 0, 0, 0.06, 0.06, 0, 0, 0, 0]
 ];
 // Mountains and Buildings cannot be walked on (preview only — server enforces for real).
 const BLOCKED_TILES = { RED: true, LGY: true };
@@ -377,6 +420,90 @@ function preloadArenaPortraits() {
     });
 }
 
+// Grass tile images (visual only — server still treats LG/DG by terrain code).
+const grassTileImgCache = {};
+
+function getCachedGrassTile(variant) {
+    if (!variant || variant < 1 || variant > 7) return null;
+    if (grassTileImgCache[variant]) return grassTileImgCache[variant];
+    const img = new Image();
+    img.src = `assets/tiles/grass_${variant}.png`;
+    grassTileImgCache[variant] = img;
+    return img;
+}
+
+function preloadGrassTiles() {
+    for (let v = 1; v <= 7; v++) getCachedGrassTile(v);
+}
+
+// Forest tree images (visual only). Width = one tile; taller than a tile so canopy overlaps upward.
+const treeTileImgCache = {};
+// Fogged copies (same black overlay as tiles, but only on opaque tree pixels).
+const treeTileFogCache = {};
+
+function getCachedTreeTile(variant) {
+    if (!variant || variant < 1 || variant > 3) return null;
+    if (treeTileImgCache[variant]) return treeTileImgCache[variant];
+    const img = new Image();
+    img.src = `assets/tiles/tree_${variant}.png`;
+    treeTileImgCache[variant] = img;
+    return img;
+}
+
+function preloadTreeTiles() {
+    for (let v = 1; v <= 3; v++) getCachedTreeTile(v);
+}
+
+// Build (and cache) a tree sprite with the same fog darken as arena tiles.
+function getFoggedTreeCanvas(variant, drawW, drawH) {
+    const key = `${variant}_${drawW}x${drawH}`;
+    if (treeTileFogCache[key]) return treeTileFogCache[key];
+
+    const img = getCachedTreeTile(variant);
+    if (!img || !img.complete || img.naturalWidth <= 0) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(drawW));
+    canvas.height = Math.max(1, Math.ceil(drawH));
+    const tctx = canvas.getContext('2d');
+    tctx.drawImage(img, 0, 0, drawW, drawH);
+    // source-atop = paint fog only where the tree already has pixels (no dark box)
+    tctx.globalCompositeOperation = 'source-atop';
+    tctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    tctx.fillRect(0, 0, canvas.width, canvas.height);
+    tctx.globalCompositeOperation = 'source-over';
+
+    treeTileFogCache[key] = canvas;
+    return canvas;
+}
+
+// Draw a forest tree bottom-aligned on its tile (canopy sticks into the tile above).
+// fogged: whole tree uses the forest tile's fog, including the overhang into the tile above.
+function drawForestTreeAt(tileX, tileY, fogged) {
+    const variant = TREE_VARIANT_MAP[tileY] && TREE_VARIANT_MAP[tileY][tileX];
+    const img = getCachedTreeTile(variant);
+    if (!img || !img.complete || img.naturalWidth <= 0) return;
+
+    const size = ARENA_GRID.cellSize;
+    const cx = ARENA_GRID.offsetX + (tileX * size);
+    const cy = ARENA_GRID.offsetY + (tileY * size);
+    const drawW = size;
+    const drawH = size * (img.naturalHeight / img.naturalWidth);
+    // Lift trunk slightly off the bottom edge (fixed 5%–10% of tile height per tree).
+    const liftFrac = (TREE_LIFT_MAP[tileY] && TREE_LIFT_MAP[tileY][tileX]) || 0.05;
+    const dx = cx;
+    const dy = cy + size - drawH - (liftFrac * size);
+
+    if (fogged) {
+        const foggedTree = getFoggedTreeCanvas(variant, drawW, drawH);
+        if (foggedTree) {
+            ctx.drawImage(foggedTree, dx, dy);
+            return;
+        }
+    }
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
 function resetPartyVisualState() {
     partyCornerLayout = {};
     partyLastMoveDir = {};
@@ -447,7 +574,9 @@ function updatePartyFacingFromPositions(parties) {
     });
 }
 
-function drawPartySpritesOnTile(ap, tileX, tileY) {
+function drawPartySpritesOnTile(ap, tileX, tileY, cornerBand) {
+    // cornerBand: 'all' | 'top' | 'bottom' — used so trees can sit between top and bottom heroes.
+    const band = cornerBand || 'all';
     const size = ARENA_GRID.cellSize;
     const half = size / 2;
     const pad = 1;
@@ -467,6 +596,9 @@ function drawPartySpritesOnTile(ap, tileX, tileY) {
         if (!member || member.hp <= 0) return; // KO → leave that corner empty
         const corner = layout[memberIndex];
         if (corner === undefined) return;
+        if (band === 'top' && corner > 1) return;
+        if (band === 'bottom' && corner < 2) return;
+
         const teamArt = HERO_PORTRAITS_TEAM[member.role];
         const src = teamArt ? teamArt[ap.faction] : null;
         const img = getCachedPortrait(src);
@@ -1451,8 +1583,17 @@ function drawArenaScreen() {
                     fill = TEAM_COLORS.p2; // rightmost home = Red
                 }
             }
+            // Light grass (LG) and forest floor (DG) use fixed grass images.
+            // Flat fill first so we still see colour while images load.
             ctx.fillStyle = fill;
             ctx.fillRect(cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+            if (tile === 'LG' || tile === 'DG') {
+                const variant = GRASS_VARIANT_MAP[y][x];
+                const grassImg = getCachedGrassTile(variant);
+                if (grassImg && grassImg.complete && grassImg.naturalWidth > 0) {
+                    ctx.drawImage(grassImg, cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+                }
+            }
 
             // Darken tiles outside your vision so fog is obvious
             if (fogged) {
@@ -1506,33 +1647,77 @@ function drawArenaScreen() {
         drawSpellBookIcon(cx, cy, book.ownerFaction);
     });
 
-    // --- Party tokens: 2×2 team portraits (living members only; enemies hidden in fog) ---
+    // --- Parties + trees (row by row, top → bottom) ---
+    // Forest trees are bottom-aligned and overlap the tile above. Draw order per row:
+    //   1) top-row heroes on forest tiles (behind their tree)
+    //   2) full party on non-forest tiles (so a tree below can cover them)
+    //   3) trees on this row (covers tile above + top heroes here; lower trees cover upper trees)
+    //   4) bottom-row heroes on forest (in front of their own tree)
+    const partiesByRow = {};
     arenaParties.forEach(ap => {
         if (typeof ap.x !== 'number' || typeof ap.y !== 'number') return;
-        // Defeated parties leave the board entirely
         if (!partyIsAlive(ap)) return;
 
         const drawTile = getPartyDrawTile(ap);
         const fogX = Math.round(drawTile.x);
         const fogY = Math.round(drawTile.y);
-
         const isFriendly = ap.faction === myFaction;
-        // Enemies only appear on tiles inside your fog vision
         if (!isFriendly && !isTileVisible(visibleTiles, fogX, fogY)) return;
 
-        const cx = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
-        const cy = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
-        drawPartySpritesOnTile(ap, cx, cy);
-
-        // Carried book above the tile — ALWAYS the book owner's colour (not the carrier's)
-        if (ap.carryingBook) {
-            drawSpellBookIcon(
-                cx + ARENA_GRID.cellSize / 2,
-                cy + 4,
-                ap.carryingBook
-            );
-        }
+        const row = Math.max(0, Math.min(ARENA_GRID.height - 1, Math.round(drawTile.y)));
+        if (!partiesByRow[row]) partiesByRow[row] = [];
+        partiesByRow[row].push({ ap, drawTile });
     });
+
+    function drawCarriedBookFor(ap, px, py) {
+        if (!ap.carryingBook) return;
+        drawSpellBookIcon(
+            px + ARENA_GRID.cellSize / 2,
+            py + 4,
+            ap.carryingBook
+        );
+    }
+
+    for (let y = 0; y < ARENA_GRID.height; y++) {
+        const rowParties = partiesByRow[y] || [];
+
+        // 1) Forest: top heroes only (corners 0–1), behind the tree
+        rowParties.forEach(({ ap, drawTile }) => {
+            const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
+            if (tileCode !== 'DG') return;
+            const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
+            const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
+            drawPartySpritesOnTile(ap, px, py, 'top');
+            // Carried book sits near the top of the tile → also behind the canopy
+            drawCarriedBookFor(ap, px, py);
+        });
+
+        // 2) Non-forest parties fully (a forest tree in the row below will cover them)
+        rowParties.forEach(({ ap, drawTile }) => {
+            const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
+            if (tileCode === 'DG') return;
+            const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
+            const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
+            drawPartySpritesOnTile(ap, px, py, 'all');
+            drawCarriedBookFor(ap, px, py);
+        });
+
+        // 3) Trees on this forest row (fog matches the forest tile the tree sits in)
+        for (let x = 0; x < ARENA_GRID.width; x++) {
+            if (ARENA_TILE_MAP[y][x] !== 'DG') continue;
+            const fogged = !isTileVisible(visibleTiles, x, y);
+            drawForestTreeAt(x, y, fogged);
+        }
+
+        // 4) Forest: bottom heroes (corners 2–3), in front of their own tree
+        rowParties.forEach(({ ap, drawTile }) => {
+            const tileCode = getClientTileAt(Math.round(drawTile.x), Math.round(drawTile.y));
+            if (tileCode !== 'DG') return;
+            const px = ARENA_GRID.offsetX + (drawTile.x * ARENA_GRID.cellSize);
+            const py = ARENA_GRID.offsetY + (drawTile.y * ARENA_GRID.cellSize);
+            drawPartySpritesOnTile(ap, px, py, 'bottom');
+        });
+    }
 
     // Outline on the selected living party's tile (deployment AND combat).
     if (selected && partyIsAlive(selected) && typeof selected.x === 'number' && typeof selected.y === 'number') {
@@ -1571,6 +1756,8 @@ function startGameLoop() {
 function loadGameAssets() {
     syncArenaCanvasSize();
     preloadArenaPortraits();
+    preloadGrassTiles();
+    preloadTreeTiles();
     startGameLoop();
     switchScreen('LANDING');
 }

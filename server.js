@@ -91,7 +91,7 @@ const ARENA_TILE_MAP = [
     ['LG','LG','LG','LG','DG','DG','LG','LG','LG','DG','DG'],
     ['LG','LG','LG','LG','DG','DG','LG','LG','LGY','DG','DG'],
     ['LG','RED','DGY','LG','LG','LG','LG','LGY','LGY','LG','LG'],
-    ['DG','LG','DGY','DG','DG','LG','LG','LG','LGY','LG','LG'],
+    ['DG','LG','DGY','DG','DG','LG','LG','LG','LG','LG','LG'],
     ['DG','LG','DGY','LG','LG','LG','DG','DG','DG','LG','LG'],
     ['LG','LG','DGY','DGY','DGY','DGY','DGY','DGY','DGY','LG','DG'],
     ['LG','LG','LG','LG','LG','DG','DG','DG','DGY','LG','DG'],
