@@ -173,6 +173,20 @@ const TREE_LIFT_MAP = [
     [0.09, 0.06, 0, 0.06, 0, 0.06, 0.07, 0, 0, 0, 0],
     [0.05, 0.10, 0, 0, 0, 0.06, 0.06, 0, 0, 0, 0]
 ];
+// Fixed road art on DGY (1–3 → road_N.png). 0 = not a road cell.
+// No matching variants on orthogonal road neighbours. (Wizard towers stay solid colour for now.)
+const ROAD_VARIANT_MAP = [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 3, 2, 1, 3, 2, 1, 3, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+];
 // Mountains and Buildings cannot be walked on (preview only — server enforces for real).
 const BLOCKED_TILES = { RED: true, LGY: true };
 
@@ -502,6 +516,107 @@ function drawForestTreeAt(tileX, tileY, fogged) {
         }
     }
     ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
+// --- Roads + grass verges (visual only) ---
+const roadTileImgCache = {};
+const vergeTileImgCache = {};
+
+function getCachedRoadTile(variant) {
+    if (!variant || variant < 1 || variant > 3) return null;
+    if (roadTileImgCache[variant]) return roadTileImgCache[variant];
+    const img = new Image();
+    img.src = `assets/tiles/road_${variant}.png`;
+    roadTileImgCache[variant] = img;
+    return img;
+}
+
+function getCachedVergeTile(variant) {
+    if (!variant || variant < 1 || variant > 6) return null;
+    if (vergeTileImgCache[variant]) return vergeTileImgCache[variant];
+    const img = new Image();
+    img.src = `assets/tiles/verge_${variant}.png`;
+    vergeTileImgCache[variant] = img;
+    return img;
+}
+
+function preloadRoadAndVergeTiles() {
+    for (let v = 1; v <= 3; v++) getCachedRoadTile(v);
+    for (let v = 1; v <= 6; v++) getCachedVergeTile(v);
+}
+
+// Roads + wizard towers both count as "road" for verge neighbours (towers keep solid colour for now).
+function isClientRoadLike(x, y) {
+    const t = getClientTileAt(x, y);
+    return t === 'DGY' || t === 'RED';
+}
+
+// Stable pick between two straight verge art variants for this cell.
+function vergeStraightPick(x, y, a, b) {
+    return ((x * 7 + y * 13) & 1) === 0 ? a : b;
+}
+
+// Build verge overlays for a grass cell from road neighbours.
+// verge_1 = outer corner (dirt in one corner); verge_2/3 = N/S straights; verge_4/5 = E/W straights;
+// verge_6 = inner corner (mostly dirt, one transparent corner). Rotations fill the other directions.
+function getVergeLayersForGrass(x, y) {
+    const N = isClientRoadLike(x, y - 1);
+    const E = isClientRoadLike(x + 1, y);
+    const S = isClientRoadLike(x, y + 1);
+    const W = isClientRoadLike(x - 1, y);
+    const NE = isClientRoadLike(x + 1, y - 1);
+    const NW = isClientRoadLike(x - 1, y - 1);
+    const SE = isClientRoadLike(x + 1, y + 1);
+    const SW = isClientRoadLike(x - 1, y + 1);
+
+    if (!(N || E || S || W || NE || NW || SE || SW)) return [];
+
+    const layers = [];
+
+    // One corner of this grass tile (e.g. SE): outer vs inner vs diagonal-only.
+    function addCorner(cardA, cardB, diag, outerRot, innerRot) {
+        if (cardA && cardB) {
+            layers.push(diag
+                ? { variant: 6, rot: innerRot }
+                : { variant: 1, rot: outerRot });
+        } else if (diag && !cardA && !cardB) {
+            layers.push({ variant: 1, rot: outerRot });
+        }
+    }
+
+    // Outer verge_1 dirt corner at 0°=SE, 90°=SW, 180°=NW, 270°=NE.
+    // Inner verge_6 transparent corner at 0°=NE, 90°=SE, 180°=SW, 270°=NW.
+    addCorner(S, E, SE, 0, 270);
+    addCorner(S, W, SW, 90, 0);
+    addCorner(N, W, NW, 180, 90);
+    addCorner(N, E, NE, 270, 180);
+
+    // Straights only when that side is road and not already a two-cardinal corner on both ends.
+    if (S && !E && !W) {
+        layers.push({ variant: vergeStraightPick(x, y, 2, 3), rot: 0 });
+    }
+    if (N && !E && !W) {
+        layers.push({ variant: vergeStraightPick(x, y, 2, 3), rot: 180 });
+    }
+    if (E && !N && !S) {
+        layers.push({ variant: vergeStraightPick(x, y, 4, 5), rot: 0 });
+    }
+    if (W && !N && !S) {
+        layers.push({ variant: vergeStraightPick(x, y, 4, 5), rot: 180 });
+    }
+
+    return layers;
+}
+
+function drawVergeLayer(cx, cy, size, layer) {
+    const img = getCachedVergeTile(layer.variant);
+    if (!img || !img.complete || img.naturalWidth <= 0) return;
+    const rot = layer.rot || 0;
+    ctx.save();
+    ctx.translate(cx + size / 2, cy + size / 2);
+    if (rot) ctx.rotate((rot * Math.PI) / 180);
+    ctx.drawImage(img, -size / 2, -size / 2, size, size);
+    ctx.restore();
 }
 
 function resetPartyVisualState() {
@@ -1593,6 +1708,17 @@ function drawArenaScreen() {
                 if (grassImg && grassImg.complete && grassImg.naturalWidth > 0) {
                     ctx.drawImage(grassImg, cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
                 }
+                // Verge sits on grass (and under trees/parties later): soft road edge facing neighbours.
+                const vergeLayers = getVergeLayersForGrass(x, y);
+                for (let i = 0; i < vergeLayers.length; i++) {
+                    drawVergeLayer(cx, cy, ARENA_GRID.cellSize, vergeLayers[i]);
+                }
+            } else if (tile === 'DGY') {
+                const roadVariant = ROAD_VARIANT_MAP[y][x];
+                const roadImg = getCachedRoadTile(roadVariant);
+                if (roadImg && roadImg.complete && roadImg.naturalWidth > 0) {
+                    ctx.drawImage(roadImg, cx, cy, ARENA_GRID.cellSize, ARENA_GRID.cellSize);
+                }
             }
 
             // Darken tiles outside your vision so fog is obvious
@@ -1758,6 +1884,7 @@ function loadGameAssets() {
     preloadArenaPortraits();
     preloadGrassTiles();
     preloadTreeTiles();
+    preloadRoadAndVergeTiles();
     startGameLoop();
     switchScreen('LANDING');
 }
