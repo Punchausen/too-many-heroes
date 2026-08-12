@@ -21,7 +21,7 @@ You must adhere 100% to the project specification at all times:
 - Knight: 120 Base HP | 25 Melee | 0 Range
 
 ## 3. Movement & Initiative Order
-- Seek: Max 1 cell path | Initiative Rank 1 (Highest)
+- Guard: Max 1 cell path | Initiative Rank 1 (Highest)
 - Advance: Max 3 cells path | Initiative Rank 2
 - March: Max 5 cells path | Initiative Rank 3 (Lowest)
 - Same Order = Simultaneous Execution.

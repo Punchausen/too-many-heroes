@@ -420,6 +420,7 @@ const HERO_PORTRAITS = {
 };
 
 // Arena-only team-tinted portraits (p1 = Blue / left, p2 = Red / right).
+// Frame 1 = idle stand; frame 2 = short fidget (_2.png).
 const HERO_PORTRAITS_TEAM = {
     Peasant: {
         p1: '/assets/characters/peasant_blue_1.png',
@@ -443,6 +444,63 @@ const HERO_PORTRAITS_TEAM = {
     }
 };
 
+// Idle fidget: every 20s show frame 2 for 0.5s. Each unit has its own random phase.
+const IDLE_ANIM_PERIOD_MS = 20000;
+const IDLE_ANIM_FLASH_MS = 500;
+// key = `${partyUid}:${memberIndex}` → phase offset in [0, PERIOD)
+const heroIdlePhaseByKey = {};
+
+// South-Park-style walk: lean ±10°, bob 5% of sprite height, loop while sliding.
+const WALK_CYCLE_MS = 160;
+const WALK_LEAN_DEG = 10;
+const WALK_BOB_FRAC = 0.05;
+// Per-hero walk phase (0–1) and starting lean direction (±1).
+const heroWalkPhaseByKey = {};
+// Party uids currently mid-slide (walk cycle on; idle fidget off).
+const walkAnimActiveUids = {};
+
+function teamPortraitSrc(role, faction, frame) {
+    const base = HERO_PORTRAITS_TEAM[role] && HERO_PORTRAITS_TEAM[role][faction];
+    if (!base) return null;
+    if (frame === 2) return base.replace(/_1\.png$/i, '_2.png');
+    return base;
+}
+
+function getHeroIdlePhaseOffset(key) {
+    if (heroIdlePhaseByKey[key] === undefined) {
+        heroIdlePhaseByKey[key] = Math.random() * IDLE_ANIM_PERIOD_MS;
+    }
+    return heroIdlePhaseByKey[key];
+}
+
+// True during that hero's 0.5s fidget window (desynced per unit).
+function isHeroIdleFlashing(key) {
+    const phase = getHeroIdlePhaseOffset(key);
+    const t = (performance.now() + phase) % IDLE_ANIM_PERIOD_MS;
+    return t < IDLE_ANIM_FLASH_MS;
+}
+
+function getHeroWalkState(key) {
+    if (!heroWalkPhaseByKey[key]) {
+        heroWalkPhaseByKey[key] = {
+            phase: Math.random(),
+            dir: Math.random() < 0.5 ? -1 : 1
+        };
+    }
+    return heroWalkPhaseByKey[key];
+}
+
+// Lean + bob for the current frame (desynced start direction / phase per hero).
+function getWalkPose(memberKey) {
+    const state = getHeroWalkState(memberKey);
+    const cycle = ((performance.now() / WALK_CYCLE_MS) + state.phase) * Math.PI * 2;
+    const lean = Math.sin(cycle) * state.dir;
+    return {
+        rotRad: lean * (WALK_LEAN_DEG * Math.PI / 180),
+        bobFrac: Math.abs(Math.sin(cycle)) * WALK_BOB_FRAC
+    };
+}
+
 // --- Arena map party sprites (2×2 portraits on a tile) ---
 
 const portraitImgCache = {};
@@ -458,8 +516,10 @@ function getCachedPortrait(src) {
 
 function preloadArenaPortraits() {
     Object.keys(HERO_PORTRAITS_TEAM).forEach(role => {
-        getCachedPortrait(HERO_PORTRAITS_TEAM[role].p1);
-        getCachedPortrait(HERO_PORTRAITS_TEAM[role].p2);
+        ['p1', 'p2'].forEach(faction => {
+            getCachedPortrait(teamPortraitSrc(role, faction, 1));
+            getCachedPortrait(teamPortraitSrc(role, faction, 2));
+        });
     });
 }
 
@@ -783,6 +843,10 @@ function resetPartyVisualState() {
     partyCornerLayout = {};
     partyLastMoveDir = {};
     partyLastPos = {};
+    // New parties get fresh random fidget / walk phases next time they're drawn.
+    for (const key of Object.keys(heroIdlePhaseByKey)) delete heroIdlePhaseByKey[key];
+    for (const key of Object.keys(heroWalkPhaseByKey)) delete heroWalkPhaseByKey[key];
+    for (const uid of Object.keys(walkAnimActiveUids)) delete walkAnimActiveUids[uid];
 }
 
 function shuffleCornerSlots() {
@@ -874,28 +938,47 @@ function drawPartySpritesOnTile(ap, tileX, tileY, cornerBand) {
         if (band === 'top' && corner > 1) return;
         if (band === 'bottom' && corner < 2) return;
 
-        const teamArt = HERO_PORTRAITS_TEAM[member.role];
-        const src = teamArt ? teamArt[ap.faction] : null;
+        const memberKey = `${ap.uid}:${memberIndex}`;
+        const isWalking = !!walkAnimActiveUids[ap.uid];
+        // Idle fidget whenever standing still on the arena map; walk cycle always wins.
+        const allowIdleAnim = !isWalking;
+        const frame = (allowIdleAnim && isHeroIdleFlashing(memberKey)) ? 2 : 1;
+        const src = teamPortraitSrc(member.role, ap.faction, frame);
+        const walkPose = isWalking ? getWalkPose(memberKey) : null;
         const img = getCachedPortrait(src);
-        if (!img || !img.complete || !img.naturalWidth) return;
+        if (!img || !img.complete || !img.naturalWidth) {
+            // Fallback to frame 1 if frame 2 hasn't loaded yet
+            const fallback = getCachedPortrait(teamPortraitSrc(member.role, ap.faction, 1));
+            if (!fallback || !fallback.complete || !fallback.naturalWidth) return;
+            drawOnePortrait(fallback, tileX, tileY, cornerOffset[corner], spriteSize, pad, faceLeft, walkPose);
+            return;
+        }
 
         const off = cornerOffset[corner];
-        const dx = tileX + off.ox + pad;
-        const dy = tileY + off.oy + pad;
-
-        ctx.save();
-        // Smooth (bilinear) scale for character sprites only — tiles stay crisp elsewhere.
-        ctx.imageSmoothingEnabled = true;
-        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
-        if (faceLeft) {
-            ctx.translate(dx + spriteSize, dy);
-            ctx.scale(-1, 1);
-            ctx.drawImage(img, 0, 0, spriteSize, spriteSize);
-        } else {
-            ctx.drawImage(img, dx, dy, spriteSize, spriteSize);
-        }
-        ctx.restore();
+        drawOnePortrait(img, tileX, tileY, off, spriteSize, pad, faceLeft, walkPose);
     });
+}
+
+function drawOnePortrait(img, tileX, tileY, off, spriteSize, pad, faceLeft, walkPose) {
+    const dx = tileX + off.ox + pad;
+    const dy = tileY + off.oy + pad;
+    // Pivot at the feet so lean/bob reads like a little walk cycle.
+    const pivotX = dx + spriteSize / 2;
+    const pivotY = dy + spriteSize;
+
+    ctx.save();
+    // Smooth (bilinear) scale for character sprites only — tiles stay crisp elsewhere.
+    ctx.imageSmoothingEnabled = true;
+    if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+
+    ctx.translate(pivotX, pivotY);
+    if (walkPose) {
+        ctx.translate(0, -walkPose.bobFrac * spriteSize);
+        ctx.rotate(walkPose.rotRad);
+    }
+    if (faceLeft) ctx.scale(-1, 1);
+    ctx.drawImage(img, -spriteSize / 2, -spriteSize, spriteSize, spriteSize);
+    ctx.restore();
 }
 
 function syncArenaCanvasSize() {
@@ -1360,7 +1443,7 @@ function isClientBlockedTile(x, y) {
 }
 
 function getClientMovementCapacity(order, startX, startY) {
-    const base = { Seek: 1, Advance: 3, March: 5 };
+    const base = { Guard: 1, Advance: 3, March: 5 };
     let capacity = base[order] || 2;
     const tile = getClientTileAt(startX, startY);
     if (tile === 'DGY') capacity += 1;
@@ -1591,6 +1674,7 @@ function animateTimelineMoves(moves) {
             setFacingFromStep(m.uid, m.from, m.to);
             animPosByUid[m.uid] = { x: m.from.x, y: m.from.y };
             partyLastPos[m.uid] = { x: m.to.x, y: m.to.y };
+            walkAnimActiveUids[m.uid] = true;
         });
         const start = performance.now();
         function frame(now) {
@@ -1606,6 +1690,7 @@ function animateTimelineMoves(moves) {
             } else {
                 moves.forEach(m => {
                     animPosByUid[m.uid] = { x: m.to.x, y: m.to.y };
+                    delete walkAnimActiveUids[m.uid];
                 });
                 resolve();
             }
@@ -1656,10 +1741,11 @@ function randomCombatHeroPos() {
     };
 }
 
-function placeCombatTheatreHeroes(halfEl, party) {
+function placeCombatTheatreHeroes(halfEl, party, faceLeft) {
     halfEl.innerHTML = '';
     if (!party || !party.members) return;
     const used = [];
+    // Right half: faceLeft true (mirror toward opponents). Left half: natural art.
     party.members.forEach((member, memberIndex) => {
         if (!member || member.hp <= 0) return;
         const teamArt = HERO_PORTRAITS_TEAM[member.role];
@@ -1682,11 +1768,20 @@ function placeCombatTheatreHeroes(halfEl, party) {
         img.alt = member.role;
         img.dataset.uid = party.uid;
         img.dataset.memberIndex = String(memberIndex);
+        img.dataset.faceLeft = faceLeft ? '1' : '0';
         img.style.left = pos.left + '%';
         img.style.top = pos.top + '%';
-        img.style.transform = 'translate(-50%, -50%)';
+        img.style.transform = combatTheatreHeroTransform(img, false);
         halfEl.appendChild(img);
     });
+}
+
+function combatTheatreHeroTransform(heroEl, knockedOut) {
+    const faceLeft = heroEl && heroEl.dataset.faceLeft === '1';
+    const parts = ['translate(-50%, -50%)'];
+    if (knockedOut) parts.push('rotate(90deg)');
+    if (faceLeft) parts.push('scaleX(-1)');
+    return parts.join(' ');
 }
 
 function getCombatTheatreHeroEl(uid, memberIndex) {
@@ -1710,8 +1805,8 @@ function openCombatTheatre(combat) {
 
         leftHalf.style.background = terrainColorForCombatTile(combat.leftTile);
         rightHalf.style.background = terrainColorForCombatTile(combat.rightTile);
-        placeCombatTheatreHeroes(leftHalf, leftParty);
-        placeCombatTheatreHeroes(rightHalf, rightParty);
+        placeCombatTheatreHeroes(leftHalf, leftParty, false);
+        placeCombatTheatreHeroes(rightHalf, rightParty, true);
 
         theatre.classList.add('is-open');
         theatre.setAttribute('aria-hidden', 'false');
@@ -1764,7 +1859,7 @@ async function playStrikeUnitHits(strike) {
         spawnTheatreFloat(heroEl, hit.damage, color, strike.kind);
         if (hit.knockedOut && heroEl) {
             heroEl.classList.add('is-ko');
-            heroEl.style.transform = 'translate(-50%, -50%) rotate(90deg)';
+            heroEl.style.transform = combatTheatreHeroTransform(heroEl, true);
         }
         await sleepMs(COMBAT_FLOAT_MS);
     }

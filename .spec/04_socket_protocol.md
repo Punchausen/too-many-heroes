@@ -6,7 +6,7 @@
 - `UPGRADE_STRUCTURE`: `{ buildingType: "tavern" | "castle" }`
 - `RECRUIT_HERO`: `{ heroTemplateId: string, partyId: string }`
 - `LAUNCH_QUEST`: `{ questId: string, partyId: string }`
-- `SUBMIT_STANCE`: `{ stance: "seek" | "advance" | "march" }`
+- `SUBMIT_STANCE`: `{ stance: "guard" | "advance" | "march" }`
 - `NAVIGATE_TO`: `{ targetRoom: "TOWN_HQ" | "TAVERN" | "CASTLE" }`[cite: 4]
 - `RETURN_TO_HQ`: `{}`[cite: 4]
 

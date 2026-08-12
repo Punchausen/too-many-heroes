@@ -74,9 +74,9 @@ let groundBooks = [];
 let postMatchReturned = { p1: false, p2: false };
 
 const NAVIGABLE_ROOMS = ['TOWN_HQ', 'TAVERN', 'CASTLE'];
-const INITIATIVE_ORDER = { Seek: 1, Advance: 2, March: 3 };
-const INITIATIVE_BANDS = ['Seek', 'Advance', 'March'];
-const ORDER_CAPACITIES = { Seek: 1, Advance: 3, March: 5 };
+const INITIATIVE_ORDER = { Guard: 1, Advance: 2, March: 3 };
+const INITIATIVE_BANDS = ['Guard', 'Advance', 'March'];
+const ORDER_CAPACITIES = { Guard: 1, Advance: 3, March: 5 };
 const GRID_MAX_X = 10;
 const GRID_MAX_Y = 9;
 // Must match public/js/client.js FOG_VISION_RANGE — Manhattan steps from living friendly parties.
@@ -709,7 +709,7 @@ function getPartyMoveSubmission(ap) {
     };
 }
 
-// Destination-tile priority for contested tiles: March > Advance > Seek
+// Destination-tile priority for contested tiles: March > Advance > Guard
 // (the "faster travel" order wins the square — opposite of combat initiative rank).
 function movementPriority(order) {
     return INITIATIVE_ORDER[order] || 0;
@@ -731,7 +731,7 @@ function meleePairKey(a, b) {
 }
 
 // Animation / sequencing weight (higher resolves first). Opposite of initiative rank numbers.
-const ORDER_COMBAT_SCORE = { Seek: 3, Advance: 2, March: 1 };
+const ORDER_COMBAT_SCORE = { Guard: 3, Advance: 2, March: 1 };
 
 function combatPairScore(a, b) {
     return (ORDER_COMBAT_SCORE[a.order] || 0) + (ORDER_COMBAT_SCORE[b.order] || 0);
@@ -1299,7 +1299,7 @@ function resolveSteppedMovementAndCombat(roundLog) {
                     return true;
                 });
 
-                // Contest: March > Advance > Seek, then firstLockFaction.
+                // Contest: March > Advance > Guard, then firstLockFaction.
                 const byEnd = new Map();
                 intended.forEach(m => {
                     const key = `${m.to.x},${m.to.y}`;

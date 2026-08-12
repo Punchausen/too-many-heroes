@@ -6,7 +6,7 @@
 
 ## 3.2 Turn Lifecycle & Initiative Engine
 Each round resolves in 3 strict phases:
-1. PLANNING PHASE: Players select squad stances (Seek / Advance / March).
+1. PLANNING PHASE: Players select squad stances (Guard / Advance / March).
 2. INITIATIVE ORDER: Speed calculations determine squad turn execution.
 3. RESOLUTION PHASE: Actions executed, range checks performed, damage calculated.
 

@@ -10,7 +10,7 @@ This file owns the game. Clients only display results.
 
 ## Must stay on the server
 - Movement validation (`validateMovementPath`)
-- Initiative (Seek > Advance > March; same order = simultaneous)
+- Initiative (Guard > Advance > March; same order = simultaneous)
 - Ranged (distance 2) and melee (distance 1) combat
 - Spillover damage (highest `baseHp` first)
 - Room / hub state transitions and gold changes
