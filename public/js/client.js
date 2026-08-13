@@ -90,6 +90,9 @@ const COMBAT_TELEGRAPH_ICON_HOLD_MS = 500; // ! / ? stay up this long after land
 const COMBAT_OPEN_MS = 500;       // window expands from centre
 const COMBAT_CLOSE_MS = 500;      // window collapses to centre
 const COMBAT_FLOAT_MS = 1000;     // per-hero damage float duration
+const COMBAT_RANGED_POSE_MS = 1000;   // hold _attack frame while shooting
+const COMBAT_RANGED_FLIGHT_MS = 420;  // projectile travel time (impact then)
+const COMBAT_MELEE_LEAP_MS = 500;     // leap out / leap back each
 const CASUALTY_THEATRE_ARC_MS = 1000; // knockback arch in the fight window
 const CASUALTY_MAP_TIP_MS = 500;      // tip-to-fall on arena / info panel after the fight
 const SLEEP_ZZZ_FRAME_MS = 1500;      // sleep_1 ↔ sleep_2 over unconscious heroes
@@ -505,6 +508,53 @@ function teamPortraitSrc(role, faction, frame) {
     return base;
 }
 
+// White hit/select flash (role-only art — not team-tinted).
+function teamFlashPortraitSrc(role) {
+    if (!role) return null;
+    return `/assets/characters/${String(role).toLowerCase()}_flash.png`;
+}
+
+// Fight-window attack pose: prefer _attack.png, fall back to _fight.png if missing.
+function teamAttackPortraitSrc(role, faction, variant) {
+    if (!role) return null;
+    const color = faction === 'p2' ? 'red' : 'blue';
+    const suffix = variant === 'fight' ? 'fight' : 'attack';
+    return `/assets/characters/${String(role).toLowerCase()}_${color}_${suffix}.png`;
+}
+
+function resolveAttackPortraitSrc(role, faction) {
+    const attackSrc = teamAttackPortraitSrc(role, faction, 'attack');
+    const fightSrc = teamAttackPortraitSrc(role, faction, 'fight');
+    const attackImg = getCachedPortrait(attackSrc);
+    // naturalWidth > 0 means the file actually loaded (404s complete with width 0).
+    if (attackImg && attackImg.complete && attackImg.naturalWidth > 0) return attackSrc;
+    const fightImg = getCachedPortrait(fightSrc);
+    if (fightImg && fightImg.complete && fightImg.naturalWidth > 0) return fightSrc;
+    // Not ready yet — prefer _attack; onerror below can swap to _fight.
+    return attackSrc || fightSrc;
+}
+
+// Combat damage flash: white → normal → white → normal over 0.5s.
+const HERO_FLASH_TOTAL_MS = 500;
+const HERO_FLASH_BEAT_MS = 125;
+// Map select: one white beat then normal (0.25s total, same beat speed).
+const SELECT_FLASH_TOTAL_MS = 250;
+// Map-token select pulse: { uid, start }
+let partySelectFlash = null;
+
+function triggerPartySelectFlash(uid) {
+    if (!uid) return;
+    partySelectFlash = { uid, start: performance.now() };
+}
+
+function isPartySelectFlashWhite(uid) {
+    if (!partySelectFlash || partySelectFlash.uid !== uid) return false;
+    const elapsed = performance.now() - partySelectFlash.start;
+    if (elapsed < 0 || elapsed >= SELECT_FLASH_TOTAL_MS) return false;
+    // Only the first beat is white.
+    return elapsed < HERO_FLASH_BEAT_MS;
+}
+
 function getHeroIdlePhaseOffset(key) {
     if (heroIdlePhaseByKey[key] === undefined) {
         heroIdlePhaseByKey[key] = Math.random() * IDLE_ANIM_PERIOD_MS;
@@ -570,6 +620,78 @@ function preloadSleepAssets() {
 function preloadCombatIcons() {
     getCachedPortrait('/assets/icons/exclamation.png');
     getCachedPortrait('/assets/icons/question.png');
+    getCachedPortrait('/assets/icons/spellbook_blue.png');
+    getCachedPortrait('/assets/icons/spellbook_red.png');
+}
+
+// Spell books: owner-coloured art (50% bigger than the old 14×16 drawn rect).
+const SPELLBOOK_DRAW_W = 21;
+const SPELLBOOK_DRAW_H = 24;
+// Trail fades over one tile of travel (~one move step).
+const SPELLBOOK_TRAIL_MS = ROUND_MOVE_MS;
+let spellbookTrail = [];
+
+function spellbookIconSrc(ownerFaction) {
+    return ownerFaction === 'p2'
+        ? '/assets/icons/spellbook_red.png'
+        : '/assets/icons/spellbook_blue.png';
+}
+
+function emitSpellbookTrail(cx, cy, ownerFaction) {
+    // A couple of faint sparkles per frame while sliding.
+    for (let i = 0; i < 2; i++) {
+        spellbookTrail.push({
+            x: cx + (Math.random() - 0.5) * 12,
+            y: cy + (Math.random() - 0.5) * 10,
+            start: performance.now(),
+            ownerFaction,
+            size: 1.2 + Math.random() * 2.2,
+            twinkle: Math.random() * Math.PI * 2
+        });
+    }
+    if (spellbookTrail.length > 100) {
+        spellbookTrail.splice(0, spellbookTrail.length - 100);
+    }
+}
+
+function drawSpellbookTrail(drawCtx) {
+    const now = performance.now();
+    spellbookTrail = spellbookTrail.filter(p => now - p.start < SPELLBOOK_TRAIL_MS);
+    if (!spellbookTrail.length) return;
+
+    drawCtx.save();
+    spellbookTrail.forEach(p => {
+        const t = (now - p.start) / SPELLBOOK_TRAIL_MS;
+        const alpha = (1 - t) * (1 - t) * 0.65;
+        if (alpha <= 0.02) return;
+        const rgb = p.ownerFaction === 'p2' ? '255,170,170' : '170,210,255';
+        const sparkle = 0.7 + 0.3 * Math.sin(now / 80 + p.twinkle);
+        drawCtx.fillStyle = `rgba(${rgb},${alpha * sparkle})`;
+        drawCtx.beginPath();
+        drawCtx.arc(p.x, p.y, p.size * (1 - t * 0.35), 0, Math.PI * 2);
+        drawCtx.fill();
+        // Tiny bright core
+        drawCtx.fillStyle = `rgba(255,248,231,${alpha * 0.85})`;
+        drawCtx.beginPath();
+        drawCtx.arc(p.x, p.y, Math.max(0.6, p.size * 0.35), 0, Math.PI * 2);
+        drawCtx.fill();
+    });
+    drawCtx.restore();
+}
+
+function preloadFlashAssets() {
+    Object.keys(HERO_PORTRAITS_TEAM).forEach(role => {
+        getCachedPortrait(teamFlashPortraitSrc(role));
+    });
+}
+
+function preloadAttackAssets() {
+    Object.keys(HERO_PORTRAITS_TEAM).forEach(role => {
+        ['p1', 'p2'].forEach(faction => {
+            getCachedPortrait(teamAttackPortraitSrc(role, faction, 'attack'));
+            getCachedPortrait(teamAttackPortraitSrc(role, faction, 'fight'));
+        });
+    });
 }
 
 // Jump height in px while the pre-fight telegraph is running (0 after landing).
@@ -1107,6 +1229,8 @@ function resetPartyVisualState() {
     pendingMapFalls = [];
     panelCasualtyTips = {};
     combatTelegraph = null;
+    partySelectFlash = null;
+    spellbookTrail = [];
 }
 
 function shuffleCornerSlots() {
@@ -1204,7 +1328,10 @@ function drawPartySpritesOnTile(ap, tileX, tileY, cornerBand) {
         const jumpPx = getCombatTelegraphJumpPx(ap.uid, spriteSize);
         const allowIdleAnim = !isWalking && jumpPx <= 0;
         const frame = (allowIdleAnim && isHeroIdleFlashing(memberKey)) ? 2 : 1;
-        const src = teamPortraitSrc(member.role, ap.faction, frame);
+        // Select pulse overrides idle fidget with the white mask art.
+        const src = isPartySelectFlashWhite(ap.uid)
+            ? teamFlashPortraitSrc(member.role)
+            : teamPortraitSrc(member.role, ap.faction, frame);
         const walkPose = isWalking ? getWalkPose(memberKey) : null;
         const img = getCachedPortrait(src);
         const drawY = tileY - jumpPx;
@@ -1632,6 +1759,7 @@ function renderArenaChrome() {
                 + `<div class="sub">${living}/${ap.members.length} standing  |  ${planOrder}</div>`;
             btn.addEventListener('click', () => {
                 selectedPartyUid = ap.uid;
+                triggerPartySelectFlash(ap.uid);
                 updateOrderButtons();
                 updateOrderButtonsEnabled();
                 renderArenaChrome();
@@ -2161,8 +2289,31 @@ function animateTheatreKnockout(heroEl) {
 }
 
 function getCombatTheatreHeroEl(uid, memberIndex) {
+    if (uid == null || memberIndex == null || memberIndex === '') return null;
     return document.querySelector(
         `.combat-theatre-hero[data-uid="${uid}"][data-member-index="${memberIndex}"]`
+    );
+}
+
+// Party-total strikes (different initiative) often omit attackerMemberIndex — pick someone to animate.
+function getCombatTheatreAttackerEl(strike) {
+    if (!strike) return null;
+    if (typeof strike.attackerMemberIndex === 'number') {
+        const exact = getCombatTheatreHeroEl(strike.attackerUid, strike.attackerMemberIndex);
+        if (exact) return exact;
+    }
+    const party = arenaParties.find(p => p.uid === strike.attackerUid);
+    if (party && Array.isArray(party.members)) {
+        for (let i = 0; i < party.members.length; i++) {
+            const m = party.members[i];
+            if (!m || m.hp <= 0) continue;
+            if (strike.kind === 'ranged' && !(m.range > 0)) continue;
+            const el = getCombatTheatreHeroEl(party.uid, i);
+            if (el && el.dataset.sleeping !== '1') return el;
+        }
+    }
+    return document.querySelector(
+        `.combat-theatre-hero[data-uid="${strike.attackerUid}"]:not([data-sleeping="1"])`
     );
 }
 
@@ -2229,27 +2380,219 @@ function closeCombatTheatre() {
 
 function spawnTheatreFloat(heroEl, damage, color, kind) {
     if (!heroEl || !heroEl.parentElement) return;
+    const parent = heroEl.parentElement;
     const floatEl = document.createElement('div');
     floatEl.className = 'combat-theatre-float';
     floatEl.style.color = color;
-    floatEl.style.left = heroEl.style.left;
-    floatEl.style.top = heroEl.style.top;
+    // Heroes are centered on left/top %; park the float just above their head.
+    const cx = parseFloat(heroEl.style.left) || 50;
+    const cy = parseFloat(heroEl.style.top) || 50;
+    const heroH = heroEl.offsetHeight || Math.max(40, parent.clientHeight * 0.22);
+    const aboveHeadPct = (heroH * 0.65 / Math.max(1, parent.clientHeight)) * 100;
+    floatEl.style.left = cx + '%';
+    floatEl.style.top = (cy - aboveHeadPct) + '%';
     const icon = kind === 'ranged' ? '➳' : '⚔';
     floatEl.textContent = `${damage} ${icon}`;
-    heroEl.parentElement.appendChild(floatEl);
+    parent.appendChild(floatEl);
     setTimeout(() => floatEl.remove(), COMBAT_FLOAT_MS);
 }
 
-async function playStrikeUnitHits(strike) {
+function getTheatrePanel(heroEl) {
+    return heroEl ? heroEl.closest('.combat-theatre-panel') : null;
+}
+
+function ensureTheatreVfxLayer(panel) {
+    if (!panel) return null;
+    let layer = panel.querySelector('.combat-theatre-vfx');
+    if (!layer) {
+        layer = document.createElement('div');
+        layer.className = 'combat-theatre-vfx';
+        panel.appendChild(layer);
+    }
+    return layer;
+}
+
+// Hero centre as % of the full fight panel (so VFX can cross left/right halves).
+function heroPointInTheatrePanel(heroEl) {
+    const panel = getTheatrePanel(heroEl);
+    if (!panel || !heroEl) return null;
+    const panelRect = panel.getBoundingClientRect();
+    const heroRect = heroEl.getBoundingClientRect();
+    if (panelRect.width <= 0 || panelRect.height <= 0) return null;
+    return {
+        panel,
+        x: ((heroRect.left + heroRect.width / 2) - panelRect.left) / panelRect.width * 100,
+        y: ((heroRect.top + heroRect.height / 2) - panelRect.top) / panelRect.height * 100
+    };
+}
+
+function setTheatreHeroAttackPose(heroEl, attacking) {
+    if (!heroEl || heroEl.dataset.sleeping === '1') return;
+    const role = heroEl.dataset.role;
+    const faction = heroEl.dataset.faction;
+    if (attacking) {
+        if (!heroEl.dataset.idleSrc) {
+            // Store the path we placed originally (not a resolved absolute URL if possible).
+            heroEl.dataset.idleSrc = (HERO_PORTRAITS_TEAM[role] && HERO_PORTRAITS_TEAM[role][faction])
+                || heroEl.getAttribute('src')
+                || heroEl.src;
+        }
+        const attackSrc = resolveAttackPortraitSrc(role, faction);
+        const fightSrc = teamAttackPortraitSrc(role, faction, 'fight');
+        if (attackSrc) {
+            heroEl.onerror = () => {
+                if (fightSrc && heroEl.src.indexOf('_fight') === -1) heroEl.src = fightSrc;
+                heroEl.onerror = null;
+            };
+            heroEl.src = attackSrc;
+        }
+    } else {
+        const idle = heroEl.dataset.idleSrc
+            || (HERO_PORTRAITS_TEAM[role] && HERO_PORTRAITS_TEAM[role][faction]);
+        if (idle) heroEl.src = idle;
+        heroEl.onerror = null;
+        delete heroEl.dataset.idleSrc;
+    }
+}
+
+function spawnTheatreImpact(panel, xPct, yPct) {
+    const layer = ensureTheatreVfxLayer(panel);
+    if (!layer) return;
+    const el = document.createElement('div');
+    el.className = 'combat-theatre-impact';
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 360);
+}
+
+function spawnTheatreSlash(panel, xPct, yPct, towardRight) {
+    const layer = ensureTheatreVfxLayer(panel);
+    if (!layer) return;
+    const el = document.createElement('div');
+    el.className = 'combat-theatre-slash';
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+    el.style.setProperty('--slash-rot', towardRight ? '-35deg' : '35deg');
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 320);
+}
+
+function flyTheatreProjectile(fromEl, toEl, role) {
+    return new Promise(resolve => {
+        const from = heroPointInTheatrePanel(fromEl);
+        const to = heroPointInTheatrePanel(toEl);
+        if (!from || !to) {
+            resolve();
+            return;
+        }
+        const layer = ensureTheatreVfxLayer(from.panel);
+        if (!layer) {
+            resolve();
+            return;
+        }
+        const el = document.createElement('div');
+        const isOrb = role === 'Wizard';
+        el.className = 'combat-theatre-projectile' + (isOrb ? ' is-orb' : '');
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        el.style.left = from.x + '%';
+        el.style.top = from.y + '%';
+        if (!isOrb) el.style.transform = `rotate(${angle}deg)`;
+        layer.appendChild(el);
+
+        const start = performance.now();
+        function frame(now) {
+            const t = Math.min(1, (now - start) / COMBAT_RANGED_FLIGHT_MS);
+            const ease = t * t; // slight accelerate into the target
+            el.style.left = (from.x + dx * ease) + '%';
+            el.style.top = (from.y + dy * ease) + '%';
+            if (t < 1) {
+                requestAnimationFrame(frame);
+            } else {
+                el.remove();
+                spawnTheatreImpact(from.panel, to.x, to.y);
+                resolve();
+            }
+        }
+        requestAnimationFrame(frame);
+    });
+}
+
+function animateTheatreLeap(heroEl, fromLeft, toLeft, durationMs) {
+    return new Promise(resolve => {
+        if (!heroEl) {
+            resolve();
+            return;
+        }
+        const start = performance.now();
+        function frame(now) {
+            const t = Math.min(1, (now - start) / durationMs);
+            // Ease out toward the apex / ease in on the return feels snappier.
+            const ease = 1 - Math.pow(1 - t, 2);
+            heroEl.style.left = (fromLeft + (toLeft - fromLeft) * ease) + '%';
+            if (t < 1) requestAnimationFrame(frame);
+            else resolve();
+        }
+        requestAnimationFrame(frame);
+    });
+}
+
+// White flash on a fight-window hero (same 0.5s cadence as map select).
+function flashTheatreHero(heroEl) {
+    return new Promise(resolve => {
+        if (!heroEl || heroEl.dataset.sleeping === '1') {
+            resolve();
+            return;
+        }
+        const role = heroEl.dataset.role;
+        const faction = heroEl.dataset.faction;
+        const flashSrc = teamFlashPortraitSrc(role);
+        const normalSrc = (HERO_PORTRAITS_TEAM[role] && HERO_PORTRAITS_TEAM[role][faction]) || null;
+        if (!flashSrc || !normalSrc) {
+            resolve();
+            return;
+        }
+
+        const start = performance.now();
+        const token = String(start);
+        heroEl.dataset.flashToken = token;
+
+        function frame(now) {
+            // Abort if another flash started or the hero already went to sleep.
+            if (heroEl.dataset.flashToken !== token || heroEl.dataset.sleeping === '1') {
+                resolve();
+                return;
+            }
+            const elapsed = now - start;
+            if (elapsed >= HERO_FLASH_TOTAL_MS) {
+                heroEl.src = normalSrc;
+                delete heroEl.dataset.flashToken;
+                resolve();
+                return;
+            }
+            const white = Math.floor(elapsed / HERO_FLASH_BEAT_MS) % 2 === 0;
+            heroEl.src = white ? flashSrc : normalSrc;
+            requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+    });
+}
+
+// Damage floats + white flash + KO arcs for everyone hit by this strike.
+async function resolveStrikeDefenderHits(strike) {
     const hits = strike.unitHits || [];
     const color = getTeamColor(strike.attackerFaction);
     const defender = arenaParties.find(p => p.uid === strike.defenderUid);
+
     for (let i = 0; i < hits.length; i++) {
         const hit = hits[i];
         const heroEl = getCombatTheatreHeroEl(strike.defenderUid, hit.memberIndex);
         spawnTheatreFloat(heroEl, hit.damage, color, strike.kind);
+        const flashPromise = flashTheatreHero(heroEl);
         if (hit.knockedOut && heroEl) {
-            await animateTheatreKnockout(heroEl);
+            await Promise.all([flashPromise, animateTheatreKnockout(heroEl)]);
             if (defender && typeof defender.x === 'number') {
                 // Map sleep faces the way they were walking on the arena, not theatre half.
                 const faceLeft = partyFacesLeft(ensurePartyFacing(defender));
@@ -2262,9 +2605,77 @@ async function playStrikeUnitHits(strike) {
                 );
             }
         } else {
-            await sleepMs(COMBAT_FLOAT_MS);
+            await Promise.all([flashPromise, sleepMs(COMBAT_FLOAT_MS)]);
         }
     }
+}
+
+async function playStrikeUnitHits(strike) {
+    const hits = strike.unitHits || [];
+    const attackerEl = getCombatTheatreAttackerEl(strike);
+    let primaryTarget = null;
+    for (let i = 0; i < hits.length; i++) {
+        primaryTarget = getCombatTheatreHeroEl(strike.defenderUid, hits[i].memberIndex);
+        if (primaryTarget) break;
+    }
+    if (!primaryTarget) {
+        primaryTarget = document.querySelector(
+            `.combat-theatre-hero[data-uid="${strike.defenderUid}"]:not([data-sleeping="1"])`
+        );
+    }
+
+    // Kick defender hit FX at the contact / projectile-arrival moment; finish with the attack motion.
+    let hitsPromise = Promise.resolve();
+    const onImpact = () => {
+        hitsPromise = resolveStrikeDefenderHits(strike);
+    };
+
+    if (strike.kind === 'ranged') {
+        // Projectile flight triggers impact; attacker holds _attack for the full second.
+        if (attackerEl) {
+            setTheatreHeroAttackPose(attackerEl, true);
+            const started = performance.now();
+            await flyTheatreProjectile(attackerEl, primaryTarget || attackerEl, attackerEl.dataset.role);
+            onImpact();
+            const remain = COMBAT_RANGED_POSE_MS - (performance.now() - started);
+            if (remain > 0) await sleepMs(remain);
+            setTheatreHeroAttackPose(attackerEl, false);
+        } else {
+            onImpact();
+        }
+    } else {
+        // Melee: leap out → slash/impact + damage → leap back.
+        if (attackerEl && attackerEl.dataset.sleeping !== '1') {
+            const parent = attackerEl.parentElement;
+            const baseLeft = parseFloat(attackerEl.style.left) || 50;
+            const faceLeft = attackerEl.dataset.faceLeft === '1';
+            // Use laid-out width when possible; fall back to the CSS ~22% token width.
+            const heroW = attackerEl.offsetWidth
+                || (parent ? parent.clientWidth * 0.22 : 0)
+                || 40;
+            const leapPct = parent
+                ? Math.max(8, (heroW * 0.5 / Math.max(1, parent.clientWidth)) * 100)
+                : 10;
+            const forwardLeft = Math.max(8, Math.min(92, baseLeft + (faceLeft ? -leapPct : leapPct)));
+
+            setTheatreHeroAttackPose(attackerEl, true);
+            await animateTheatreLeap(attackerEl, baseLeft, forwardLeft, COMBAT_MELEE_LEAP_MS);
+
+            const tip = heroPointInTheatrePanel(attackerEl);
+            if (tip) {
+                spawnTheatreSlash(tip.panel, tip.x + (faceLeft ? -2 : 2), tip.y, !faceLeft);
+                spawnTheatreImpact(tip.panel, tip.x + (faceLeft ? -3 : 3), tip.y);
+            }
+            onImpact();
+
+            await animateTheatreLeap(attackerEl, forwardLeft, baseLeft, COMBAT_MELEE_LEAP_MS);
+            setTheatreHeroAttackPose(attackerEl, false);
+        } else {
+            onImpact();
+        }
+    }
+
+    await hitsPromise;
 }
 
 async function playTheatreWave(wave) {
@@ -2450,31 +2861,49 @@ function drawArenaScreen() {
         }
     }
 
-    // Draw a small book shape in the OWNER tower's colour (emoji ignore fillStyle).
-    // So a Red spell book stays red whether Blue or Red is holding it.
+    // Draw a spell book (owner tower colour). 50% bigger than the old 14×16 rect.
+    // Glow on all books; stardust trail only while a carrier is mid-slide.
     function drawSpellBookIcon(centerX, centerY, ownerFaction) {
-        const bookColor = getTeamColor(ownerFaction);
-        const w = 14;
-        const h = 16;
+        const w = SPELLBOOK_DRAW_W;
+        const h = SPELLBOOK_DRAW_H;
         const x = centerX - w / 2;
         const y = centerY - h / 2;
-        ctx.fillStyle = bookColor;
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = '#111';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, w, h);
-        // Spine line
+        const rgb = ownerFaction === 'p2' ? '214,40,40' : '30,136,229';
+        const img = getCachedPortrait(spellbookIconSrc(ownerFaction));
+
+        ctx.save();
+        // Soft coloured halo behind the art.
+        const glowR = Math.max(w, h) * 0.95;
+        const grd = ctx.createRadialGradient(centerX, centerY, 2, centerX, centerY, glowR);
+        grd.addColorStop(0, `rgba(${rgb},0.55)`);
+        grd.addColorStop(0.55, `rgba(${rgb},0.2)`);
+        grd.addColorStop(1, `rgba(${rgb},0)`);
+        ctx.fillStyle = grd;
         ctx.beginPath();
-        ctx.moveTo(centerX, y + 2);
-        ctx.lineTo(centerX, y + h - 2);
-        ctx.stroke();
-        // Tiny pages hint
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.beginPath();
-        ctx.moveTo(x + 3, y + 4);
-        ctx.lineTo(x + w - 3, y + 4);
-        ctx.stroke();
+        ctx.arc(centerX, centerY, glowR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.shadowColor = `rgba(${rgb},0.95)`;
+        ctx.shadowBlur = 14;
+        ctx.imageSmoothingEnabled = true;
+        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.drawImage(img, x, y, w, h);
+        } else {
+            // Fallback if the PNG hasn't loaded yet.
+            ctx.fillStyle = getTeamColor(ownerFaction);
+            ctx.fillRect(x, y, w, h);
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, w, h);
+        }
+        ctx.restore();
     }
+
+    // Stardust under books (emitted while carriers slide — see drawCarriedBookFor).
+    drawSpellbookTrail(ctx);
 
     // Ground spell books — only on tiles you can see
     groundBooks.forEach(book => {
@@ -2511,11 +2940,13 @@ function drawArenaScreen() {
 
     function drawCarriedBookFor(ap, px, py) {
         if (!ap.carryingBook) return;
-        drawSpellBookIcon(
-            px + ARENA_GRID.cellSize / 2,
-            py + 4,
-            ap.carryingBook
-        );
+        const cx = px + ARENA_GRID.cellSize / 2;
+        const cy = py + 4;
+        // Magical tracer only while this party is sliding between tiles.
+        if (walkAnimActiveUids[ap.uid]) {
+            emitSpellbookTrail(cx, cy, ap.carryingBook);
+        }
+        drawSpellBookIcon(cx, cy, ap.carryingBook);
     }
 
     const drawDeploy = arenaPhase === 'DEPLOYMENT' && (myFaction === 'p1' || myFaction === 'p2');
@@ -2628,6 +3059,8 @@ function loadGameAssets() {
     preloadTowerTiles();
     preloadSleepAssets();
     preloadCombatIcons();
+    preloadFlashAssets();
+    preloadAttackAssets();
     startGameLoop();
     switchScreen('LANDING');
 }

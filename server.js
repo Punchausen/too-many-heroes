@@ -964,16 +964,22 @@ function resolveMeleePairTheatre(pair, roundLog, foeCountA, foeCountB) {
             ? (typeof pair.foeIndexA === 'number' ? pair.foeIndexA : 0)
             : (typeof pair.foeIndexB === 'number' ? pair.foeIndexB : 0);
 
+        // Pick a living member index so the client can play the attack leap / pose.
+        function leadMeleeIndex(party) {
+            const order = livingMembersByTankOrder(party.members);
+            return order.length ? order[0].index : null;
+        }
+
         if (partyIsAlive(first) && partyIsAlive(second)) {
             let dmg = unitShare(Math.floor(partyMeleeOutput(first) * 1.2), firstSplit, firstIdx);
             roundLog += ` -> (+20% surprise on ${first.name})<br>`;
-            const res = makeStrike(first, second, dmg, 'melee', null, roundLog);
+            const res = makeStrike(first, second, dmg, 'melee', leadMeleeIndex(first), roundLog);
             roundLog = res.roundLog;
             roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
         }
         if (partyIsAlive(first) && partyIsAlive(second) && manhattan(first, second) === 1) {
             const dmg = unitShare(partyMeleeOutput(second), secondSplit, secondIdx);
-            const res = makeStrike(second, first, dmg, 'melee', null, roundLog);
+            const res = makeStrike(second, first, dmg, 'melee', leadMeleeIndex(second), roundLog);
             roundLog = res.roundLog;
             roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
         }
@@ -1061,7 +1067,11 @@ function resolveRangedPairTheatre(pair, roundLog) {
             if (!partyIsAlive(attacker) || !partyIsAlive(defender)) return;
             let dmg = partyRangedOutput(attacker);
             dmg = applyRangedDefenceModifier(dmg, defender);
-            const res = makeStrike(attacker, defender, dmg, 'ranged', null, roundLog);
+            // Lead living ranged unit animates the shot in the fight window.
+            const rangedOrder = livingMembersByTankOrder(attacker.members)
+                .filter(x => getUnitRangedOutput(x.m, attacker.order) > 0);
+            const leadIdx = rangedOrder.length ? rangedOrder[0].index : null;
+            const res = makeStrike(attacker, defender, dmg, 'ranged', leadIdx, roundLog);
             roundLog = res.roundLog;
             roundLog = pushWave(waves, res.strike ? [res.strike] : [], roundLog);
         });
