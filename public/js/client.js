@@ -80,6 +80,11 @@ let partyLastPos = {};
 let localPlans = {};
 
 let isWaitingForCombatResolution = false;
+// Place Parties / Day N title card — blocks arena input while playing.
+let arenaTitleCardBlocking = false;
+let arenaTitleCardQueue = Promise.resolve();
+let lastArenaTitleDayShown = 0; // 0 = none yet this match; 1–10 = last day card shown
+let prevArenaPhaseForTitle = null;
 let matchActive = true;
 
 // Round resolution playback (server still owns outcomes; we only animate them).
@@ -622,6 +627,11 @@ function preloadCombatIcons() {
     getCachedPortrait('/assets/icons/question.png');
     getCachedPortrait('/assets/icons/spellbook_blue.png');
     getCachedPortrait('/assets/icons/spellbook_red.png');
+    getCachedPortrait('/assets/icons/place_parties.png');
+    [
+        'day_one', 'day_two', 'day_three', 'day_four', 'day_five',
+        'day_six', 'day_seven', 'day_eight', 'day_nine', 'day_ten'
+    ].forEach(name => getCachedPortrait(`/assets/icons/${name}.png`));
 }
 
 // Spell books: owner-coloured art (50% bigger than the old 14×16 drawn rect).
@@ -1649,6 +1659,7 @@ function applyStateSync(data) {
     }
 
     if (data.arena) {
+        const phaseBefore = arenaPhase;
         // During move playback, ignore position snaps from STATE_SYNC (final state is applied after).
         if (!isPlayingRoundAnimation) {
             if (data.arena.currentRound) currentRound = data.arena.currentRound;
@@ -1671,6 +1682,12 @@ function applyStateSync(data) {
         if (data.arena.playerNames) {
             arenaPlayerNames = data.arena.playerNames;
         }
+
+        // Ready → combat: show Day 1 title before planning.
+        if (phaseBefore !== 'COMBAT' && arenaPhase === 'COMBAT') {
+            enqueueDayTitleCard(currentRound || 1);
+        }
+        prevArenaPhaseForTitle = arenaPhase;
     }
 
     // Once we leave the landing screen, re-enable the join form.
@@ -1758,6 +1775,7 @@ function renderArenaChrome() {
             btn.innerHTML = `<div style="color:${alive ? team : '#666'};font-weight:bold;">${ap.number}. ${ap.name}</div>`
                 + `<div class="sub">${living}/${ap.members.length} standing  |  ${planOrder}</div>`;
             btn.addEventListener('click', () => {
+                if (arenaTitleCardBlocking) return;
                 selectedPartyUid = ap.uid;
                 triggerPartySelectFlash(ap.uid);
                 updateOrderButtons();
@@ -1834,7 +1852,7 @@ function updateLockTurnButton() {
             btn.disabled = true;
             btn.textContent = 'Awaiting deployment..';
         } else if (!mine.ready) {
-            btn.disabled = false;
+            btn.disabled = arenaTitleCardBlocking;
             btn.textContent = 'READY';
         } else {
             btn.disabled = true;
@@ -1843,14 +1861,17 @@ function updateLockTurnButton() {
         return;
     }
 
-    btn.disabled = isWaitingForCombatResolution || myFaction === 'spectator';
+    btn.disabled = isWaitingForCombatResolution || arenaTitleCardBlocking || myFaction === 'spectator';
     btn.textContent = isWaitingForCombatResolution
         ? "WAITING FOR OPPONENT'S STRATEGY..."
         : 'LOCK IN ORDERS FOR THIS ROUND';
 }
 
 function updateOrderButtonsEnabled() {
-    const enabled = arenaPhase === 'COMBAT' && myFaction !== 'spectator' && !!getSelectedArenaParty();
+    const enabled = arenaPhase === 'COMBAT'
+        && myFaction !== 'spectator'
+        && !!getSelectedArenaParty()
+        && !arenaTitleCardBlocking;
     document.querySelectorAll('.order-btn').forEach(btn => {
         btn.disabled = !enabled;
     });
@@ -2063,7 +2084,7 @@ function submitTurn() {
 }
 
 function onLockOrReadyClick() {
-    if (myFaction === 'spectator') return;
+    if (myFaction === 'spectator' || arenaTitleCardBlocking) return;
     if (arenaPhase === 'DEPLOYMENT') {
         const mine = deploymentStatus[myFaction];
         if (mine && mine.placed && !mine.ready) submitDeployReady();
@@ -2076,6 +2097,72 @@ function onLockOrReadyClick() {
 
 function sleepMs(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+const ARENA_TITLE_FADE_MS = 500;
+const ARENA_TITLE_HOLD_MS = 1000;
+const DAY_TITLE_NAMES = [
+    null,
+    'day_one', 'day_two', 'day_three', 'day_four', 'day_five',
+    'day_six', 'day_seven', 'day_eight', 'day_nine', 'day_ten'
+];
+
+function setArenaTitleCardBlocking(blocking) {
+    arenaTitleCardBlocking = !!blocking;
+    updateLockTurnButton();
+    updateOrderButtonsEnabled();
+}
+
+// Dim → fade title in → hold → fade out. Blocks arena input while active.
+function playArenaTitleCard(baseName) {
+    return new Promise(resolve => {
+        const card = document.getElementById('arena-title-card');
+        const img = document.getElementById('arena-title-card-img');
+        if (!card || !img || !baseName) {
+            resolve();
+            return;
+        }
+
+        setArenaTitleCardBlocking(true);
+        const mapFrame = document.getElementById('arena-map-frame')
+            || document.getElementById('arena-map-scroll');
+        const mapW = mapFrame ? mapFrame.clientWidth : 0;
+        // Mobile map pane is narrow — double the title so Place Parties / Day X stay readable.
+        const frac = isMobileLikeDevice() ? 0.4 : 0.2;
+        img.style.width = mapW > 0 ? `${Math.round(mapW * frac)}px` : `${frac * 100}%`;
+        img.src = `/assets/icons/${baseName}.png`;
+        img.alt = baseName.replace(/_/g, ' ');
+
+        card.classList.add('is-active');
+        card.setAttribute('aria-hidden', 'false');
+        void card.offsetWidth; // restart CSS transitions from opacity 0
+        card.classList.add('is-dim', 'is-show-title');
+
+        setTimeout(() => {
+            card.classList.remove('is-dim', 'is-show-title');
+            setTimeout(() => {
+                card.classList.remove('is-active');
+                card.setAttribute('aria-hidden', 'true');
+                setArenaTitleCardBlocking(false);
+                resolve();
+            }, ARENA_TITLE_FADE_MS);
+        }, ARENA_TITLE_FADE_MS + ARENA_TITLE_HOLD_MS);
+    });
+}
+
+function enqueueArenaTitleCard(baseName) {
+    arenaTitleCardQueue = arenaTitleCardQueue
+        .catch(() => {})
+        .then(() => playArenaTitleCard(baseName));
+    return arenaTitleCardQueue;
+}
+
+function enqueueDayTitleCard(dayNum) {
+    const name = DAY_TITLE_NAMES[dayNum];
+    if (!name) return arenaTitleCardQueue;
+    if (dayNum <= lastArenaTitleDayShown) return arenaTitleCardQueue;
+    lastArenaTitleDayShown = dayNum;
+    return enqueueArenaTitleCard(name);
 }
 
 // Tile used for drawing (fractional while sliding between squares).
@@ -2759,6 +2846,12 @@ function finishRoundAnimation(data) {
         const summary = pendingGameOverSummary;
         pendingGameOverSummary = null;
         applyGameOverSummary(summary);
+        return;
+    }
+
+    // Next day begins — title card before the player plans again.
+    if (arenaPhase === 'COMBAT' && currentRound >= 1 && currentRound <= 10) {
+        enqueueDayTitleCard(currentRound);
     }
 }
 
@@ -3135,6 +3228,28 @@ function wireNavigationButtons() {
     document.getElementById('btn-go-castle').addEventListener('click', () => {
         socket.emit('NAVIGATE_TO', { targetRoom: 'CASTLE' });
     });
+    // Mobile: some browsers swallow the first tap as :hover only — also navigate on a clean tap.
+    [['btn-go-tavern', 'TAVERN'], ['btn-go-castle', 'CASTLE']].forEach(([id, room]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        let tapStart = null;
+        el.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            tapStart = { x: e.clientX, y: e.clientY, type: e.pointerType };
+        });
+        el.addEventListener('pointerup', (e) => {
+            if (!tapStart) return;
+            const dx = Math.abs(e.clientX - tapStart.x);
+            const dy = Math.abs(e.clientY - tapStart.y);
+            const type = tapStart.type;
+            tapStart = null;
+            if (dx > 14 || dy > 14) return;
+            // Mouse still uses click; touch/pen navigate here so the first tap always counts.
+            if (type === 'mouse') return;
+            socket.emit('NAVIGATE_TO', { targetRoom: room });
+        });
+        el.addEventListener('pointercancel', () => { tapStart = null; });
+    });
     document.getElementById('btn-tavern-return-hq').addEventListener('click', () => {
         socket.emit('NAVIGATE_TO', { targetRoom: 'TOWN_HQ' });
     });
@@ -3206,6 +3321,7 @@ function canvasCellFromEvent(event) {
 
 function handleArenaPointer(event) {
     if (currentRoomState !== 'TACTICAL_ARENA' || myFaction === 'spectator' || !matchActive) return;
+    if (arenaTitleCardBlocking) return;
 
     const cell = canvasCellFromEvent(event);
     if (!cell) return;
@@ -3311,6 +3427,8 @@ socket.on('transition-stage', (data) => {
         resetPartyVisualState();
         groundBooks = [];
         arenaPhase = 'DEPLOYMENT';
+        prevArenaPhaseForTitle = 'DEPLOYMENT';
+        lastArenaTitleDayShown = 0;
         arenaParties = data.arenaParties || [];
         updatePartyFacingFromPositions(arenaParties);
         selectedPartyUid = null;
@@ -3327,6 +3445,8 @@ socket.on('transition-stage', (data) => {
         isWaitingForOpponentLaunch = false;
         switchScreen('TACTICAL_ARENA');
         renderSyncedUI();
+        // First beat: Place Parties title before any deployment clicks.
+        enqueueArenaTitleCard('place_parties');
     }
 });
 

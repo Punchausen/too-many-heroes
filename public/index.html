@@ -343,6 +343,8 @@
             cursor: pointer;
             z-index: 1;
             -webkit-tap-highlight-color: transparent;
+            /* Avoid 300ms tap delay / sticky-hover eating the first tap on phones */
+            touch-action: manipulation;
         }
         .town-tooltip img {
             display: block;
@@ -351,12 +353,20 @@
             pointer-events: none;
             transition: filter 0.15s ease, transform 0.15s ease;
         }
-        /* Faint yellow glow on hover / keyboard focus (touch: icons stay visible without glow) */
-        .town-tooltip:hover img,
-        .town-tooltip:focus-visible img {
+        /* Touch feedback without sticky :hover (first tap used to only glow, not click) */
+        .town-tooltip:active img {
             filter:
                 drop-shadow(0 0 4px rgba(255, 230, 100, 0.7))
                 drop-shadow(0 0 10px rgba(255, 210, 60, 0.45));
+        }
+        /* Real mouse/trackpad only — phones must not get sticky hover */
+        @media (hover: hover) and (pointer: fine) {
+            .town-tooltip:hover img,
+            .town-tooltip:focus-visible img {
+                filter:
+                    drop-shadow(0 0 4px rgba(255, 230, 100, 0.7))
+                    drop-shadow(0 0 10px rgba(255, 210, 60, 0.45));
+            }
         }
         .town-tooltip:focus { outline: none; }
         /* 60% of native icon size, relative to the 1024px-wide town art.
@@ -385,6 +395,7 @@
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
             vertical-align: middle;
+            touch-action: manipulation;
         }
         .icon-btn:focus { outline: none; }
         .icon-btn img {
@@ -398,11 +409,18 @@
         /* +50% vs previous 56px so Return to Town reads clearly at the footer */
         .icon-btn--return img { height: 84px; max-width: min(540px, 94vw); }
         .icon-btn--back img { height: 48px; }
-        .icon-btn:hover:not(:disabled) img,
-        .icon-btn:focus-visible:not(:disabled) img {
+        .icon-btn:active:not(:disabled) img {
             filter:
                 drop-shadow(0 0 4px rgba(255, 230, 100, 0.7))
                 drop-shadow(0 0 10px rgba(255, 210, 60, 0.45));
+        }
+        @media (hover: hover) and (pointer: fine) {
+            .icon-btn:hover:not(:disabled) img,
+            .icon-btn:focus-visible:not(:disabled) img {
+                filter:
+                    drop-shadow(0 0 4px rgba(255, 230, 100, 0.7))
+                    drop-shadow(0 0 10px rgba(255, 210, 60, 0.45));
+            }
         }
         /* Can't afford: grey + dim, no hover glow */
         .icon-btn:disabled {
@@ -664,6 +682,7 @@
         #screen-tactical-arena {
             background: #0a0a0a;
             overflow: hidden;
+            position: relative;
         }
         #arena-chrome {
             display: flex;
@@ -987,6 +1006,40 @@
             background: transparent;
             text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
         }
+        /* Place Parties / Day N title card — dims arena and blocks input */
+        .arena-title-card {
+            position: absolute;
+            inset: 0;
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .arena-title-card.is-active {
+            display: flex;
+            pointer-events: auto;
+        }
+        .arena-title-card-dim {
+            position: absolute;
+            inset: 0;
+            background: #000;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+        /* ~20% screen brightness ⇒ 80% black overlay */
+        .arena-title-card.is-dim .arena-title-card-dim { opacity: 0.8; }
+        .arena-title-card-img {
+            position: relative;
+            z-index: 1;
+            width: 20%;
+            height: auto;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            filter: drop-shadow(0 4px 18px rgba(0, 0, 0, 0.85));
+            pointer-events: none;
+        }
+        .arena-title-card.is-show-title .arena-title-card-img { opacity: 1; }
         /* Selected-party members: light text over translucent dark cards on wood */
         #arena-party-detail .hero-card {
             background: rgba(0, 0, 0, 0.45);
@@ -1261,6 +1314,10 @@ REWARD: 100g</div>
                 </div>
                 <p id="arena-round-label">ROUND: 1 / 4</p>
             </div>
+        </div>
+        <div id="arena-title-card" class="arena-title-card" aria-hidden="true">
+            <div class="arena-title-card-dim"></div>
+            <img id="arena-title-card-img" class="arena-title-card-img" alt="">
         </div>
     </div>
 
