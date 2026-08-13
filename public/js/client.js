@@ -84,16 +84,31 @@ let matchActive = true;
 
 // Round resolution playback (server still owns outcomes; we only animate them).
 const ROUND_MOVE_MS = 500;        // slide duration for one square
-const ROUND_STEP_GAP_MS = 1000;   // pause between movement steps (no combat)
-const COMBAT_PAUSE_MS = 1000;     // wait before opening the fight window
+const COMBAT_PAUSE_MS = 500;      // brief pause before pre-fight telegraph
+const COMBAT_TELEGRAPH_JUMP_MS = 300;  // unison jump before the fight window
+const COMBAT_TELEGRAPH_ICON_HOLD_MS = 500; // ! / ? stay up this long after landing
 const COMBAT_OPEN_MS = 500;       // window expands from centre
 const COMBAT_CLOSE_MS = 500;      // window collapses to centre
 const COMBAT_FLOAT_MS = 1000;     // per-hero damage float duration
+const CASUALTY_THEATRE_ARC_MS = 1000; // knockback arch in the fight window
+const CASUALTY_MAP_TIP_MS = 500;      // tip-to-fall on arena / info panel after the fight
+const SLEEP_ZZZ_FRAME_MS = 1500;      // sleep_1 ↔ sleep_2 over unconscious heroes
+// Must match server.js INITIATIVE_ORDER (lower number strikes first).
+const ORDER_INITIATIVE = { Guard: 1, Advance: 2, March: 3 };
 let isPlayingRoundAnimation = false;
 // While animating: fractional tile positions { [uid]: { x, y } }. Null = use server ints.
 let animPosByUid = null;
 // If GAME_OVER arrives mid-animation, show it after the slides finish.
 let pendingGameOverSummary = null;
+// Unconscious heroes left on the map where they fell (do not move with their party).
+// { id, role, faction, x, y, faceLeft, ox, oy, phase: 'tipping'|'sleep', tipStart }
+let groundCasualties = [];
+// KOs finished in the fight window; tip on the map when that window closes.
+let pendingMapFalls = [];
+// Info-panel tip anims: key `${uid}:${memberIndex}` → tipStart ms
+let panelCasualtyTips = {};
+// Pre-fight jump + !/? icons: { start, parties: [{ uid, icon: 'exclamation'|'question' }] }
+let combatTelegraph = null;
 
 // Party detail screen remembers where "Back" should return (TAVERN or CASTLE).
 let partyDetailReturnTo = 'TAVERN';
@@ -232,6 +247,8 @@ function switchScreen(newState) {
     const screenId = SCREEN_MAP[newState];
     if (screenId) document.getElementById(screenId).classList.add('active');
     if (newState === 'TACTICAL_ARENA') {
+        // One-shot home camera when first entering the arena (not on every resize).
+        pendingArenaScrollHome = true;
         requestAnimationFrame(fitMapCanvasInFrame);
     }
     if (newState === 'TOWN_HQ') {
@@ -311,6 +328,26 @@ function fitPartyDetailStage() {
 }
 
 // Keep the map at native tile size (100px cells → 1100×1000). Never scale-to-fit.
+// Set once on arena entry: Blue (p1) top-left, Red (p2) bottom-right when the map overflows.
+let pendingArenaScrollHome = false;
+
+function applyInitialArenaViewIfNeeded() {
+    if (!pendingArenaScrollHome) return;
+    const frame = document.getElementById('arena-map-scroll');
+    if (!frame || currentRoomState !== 'TACTICAL_ARENA') return;
+    if (frame.clientWidth <= 0 || frame.clientHeight <= 0) return; // layout not ready — retry on next fit
+
+    pendingArenaScrollHome = false;
+    if (myFaction === 'p2') {
+        frame.scrollLeft = Math.max(0, frame.scrollWidth - frame.clientWidth);
+        frame.scrollTop = Math.max(0, frame.scrollHeight - frame.clientHeight);
+    } else {
+        // Blue (p1) and spectators: top-left.
+        frame.scrollLeft = 0;
+        frame.scrollTop = 0;
+    }
+}
+
 // Centre on each axis that still fits; scroll only on axes that overflow.
 function fitMapCanvasInFrame() {
     const frame = document.getElementById('arena-map-scroll');
@@ -331,6 +368,8 @@ function fitMapCanvasInFrame() {
     // the map is narrower and/or shorter than the scroll frame.
     center.style.width = `${Math.max(mapW, frameW)}px`;
     center.style.height = `${Math.max(mapH, frameH)}px`;
+
+    applyInitialArenaViewIfNeeded();
 }
 
 // Phones/tablets: try OS landscape lock (often needs fullscreen); else show rotate overlay.
@@ -499,6 +538,223 @@ function getWalkPose(memberKey) {
         rotRad: lean * (WALK_LEAN_DEG * Math.PI / 180),
         bobFrac: Math.abs(Math.sin(cycle)) * WALK_BOB_FRAC
     };
+}
+
+// --- Unconscious / sleep casualties (arena map, fight window, info panel) ---
+
+function teamSleepPortraitSrc(role, faction) {
+    if (!role) return null;
+    const color = faction === 'p2' ? 'red' : 'blue';
+    return `/assets/characters/${String(role).toLowerCase()}_${color}_sleep.png`;
+}
+
+// Peasant sleep art includes a long rake, so they read tiny unless boosted.
+function sleepPortraitScale(role) {
+    return role === 'Peasant' ? 1.2 : 1;
+}
+
+function sleepZzzSrc() {
+    const frame = (Math.floor(performance.now() / SLEEP_ZZZ_FRAME_MS) % 2) + 1;
+    return `/assets/characters/sleep_${frame}.png`;
+}
+
+function preloadSleepAssets() {
+    Object.keys(HERO_PORTRAITS_TEAM).forEach(role => {
+        getCachedPortrait(teamSleepPortraitSrc(role, 'p1'));
+        getCachedPortrait(teamSleepPortraitSrc(role, 'p2'));
+    });
+    getCachedPortrait('/assets/characters/sleep_1.png');
+    getCachedPortrait('/assets/characters/sleep_2.png');
+}
+
+function preloadCombatIcons() {
+    getCachedPortrait('/assets/icons/exclamation.png');
+    getCachedPortrait('/assets/icons/question.png');
+}
+
+// Jump height in px while the pre-fight telegraph is running (0 after landing).
+function getCombatTelegraphJumpPx(uid, heroHeightPx) {
+    if (!combatTelegraph) return 0;
+    if (!combatTelegraph.parties.some(p => p.uid === uid)) return 0;
+    const elapsed = performance.now() - combatTelegraph.start;
+    if (elapsed < 0 || elapsed >= COMBAT_TELEGRAPH_JUMP_MS) return 0;
+    const t = elapsed / COMBAT_TELEGRAPH_JUMP_MS;
+    const peak = heroHeightPx / 3;
+    return 4 * peak * t * (1 - t);
+}
+
+function drawCombatTelegraphIcons() {
+    if (!combatTelegraph) return;
+    const elapsed = performance.now() - combatTelegraph.start;
+    const totalMs = COMBAT_TELEGRAPH_JUMP_MS + COMBAT_TELEGRAPH_ICON_HOLD_MS;
+    if (elapsed < 0 || elapsed >= totalMs) return;
+
+    // Spring in over the jump; hold at full size afterward.
+    const appearT = Math.min(1, elapsed / COMBAT_TELEGRAPH_JUMP_MS);
+    const spring = Math.sin(appearT * Math.PI / 2);
+        const size = ARENA_GRID.cellSize;
+    const iconSize = size * 0.21; // half of previous 0.42 — ! / ? telegraph markers
+
+    combatTelegraph.parties.forEach(entry => {
+        const ap = arenaParties.find(p => p.uid === entry.uid);
+        if (!ap || typeof ap.x !== 'number') return;
+        const drawTile = getPartyDrawTile(ap);
+        const cx = ARENA_GRID.offsetX + (drawTile.x * size) + size / 2;
+        // Sit about one sprite tall above the party token.
+        const cy = ARENA_GRID.offsetY + (drawTile.y * size) - iconSize * 0.15;
+        const img = getCachedPortrait(`/assets/icons/${entry.icon}.png`);
+        if (!img || !img.complete || !img.naturalWidth) return;
+
+        // Same height for ! and ?; squash ! horizontally so it isn't too fat.
+        const h = iconSize * (0.85 + 0.15 * spring) * spring;
+        const w = entry.icon === 'exclamation' ? h * 0.5 : h;
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, cx - w / 2, cy - h, w, h);
+        ctx.restore();
+    });
+}
+
+// Unison jump + !/? above the two parties about to fight (initiative-based).
+function playCombatTelegraph(combat) {
+    const a = arenaParties.find(p => p.uid === combat.leftUid);
+    const b = arenaParties.find(p => p.uid === combat.rightUid);
+    if (!a || !b) return Promise.resolve();
+
+    const initA = ORDER_INITIATIVE[a.order] || 2;
+    const initB = ORDER_INITIATIVE[b.order] || 2;
+    let iconA = 'exclamation';
+    let iconB = 'exclamation';
+    if (initA < initB) {
+        iconA = 'exclamation';
+        iconB = 'question';
+    } else if (initB < initA) {
+        iconA = 'question';
+        iconB = 'exclamation';
+    }
+
+    combatTelegraph = {
+        start: performance.now(),
+        parties: [
+            { uid: a.uid, icon: iconA },
+            { uid: b.uid, icon: iconB }
+        ]
+    };
+
+    return sleepMs(COMBAT_TELEGRAPH_JUMP_MS + COMBAT_TELEGRAPH_ICON_HOLD_MS).then(() => {
+        combatTelegraph = null;
+    });
+}
+
+function scatterOffsetForCasualtyTile(x, y) {
+    const n = groundCasualties.filter(c => c.x === x && c.y === y).length
+        + pendingMapFalls.filter(c => c.x === x && c.y === y).length;
+    if (n === 0) return { ox: 0, oy: 0 };
+    const angle = n * 2.3;
+    const r = Math.min(22, 5 + n * 6);
+    return { ox: Math.cos(angle) * r, oy: Math.sin(angle) * r };
+}
+
+function queueCasualtyFromKnockout(party, memberIndex, tileX, tileY, faceLeft) {
+    if (!party || !party.members || !party.members[memberIndex]) return null;
+    const member = party.members[memberIndex];
+    const id = `${party.uid}:${memberIndex}:${tileX},${tileY}`;
+    if (groundCasualties.some(c => c.id === id) || pendingMapFalls.some(c => c.id === id)) {
+        return null;
+    }
+    const scatter = scatterOffsetForCasualtyTile(tileX, tileY);
+    const entry = {
+        id,
+        uid: party.uid,
+        memberIndex,
+        role: member.role,
+        faction: party.faction,
+        x: tileX,
+        y: tileY,
+        faceLeft: !!faceLeft,
+        ox: scatter.ox,
+        oy: scatter.oy,
+        phase: 'pending',
+        tipStart: 0
+    };
+    pendingMapFalls.push(entry);
+    return entry;
+}
+
+// After the fight window closes: tip on the map (and info panel if that party is selected).
+function beginPendingMapCasualtyFalls() {
+    const now = performance.now();
+    pendingMapFalls.forEach(c => {
+        c.phase = 'tipping';
+        c.tipStart = now;
+        groundCasualties.push(c);
+        if (selectedPartyUid === c.uid) {
+            panelCasualtyTips[`${c.uid}:${c.memberIndex}`] = now;
+        }
+    });
+    pendingMapFalls = [];
+    if (Object.keys(panelCasualtyTips).length) {
+        renderArenaChrome();
+        // Swap panel portraits to sleep after the tip finishes.
+        setTimeout(() => {
+            renderArenaChrome();
+        }, CASUALTY_MAP_TIP_MS + 30);
+    }
+}
+
+function drawSleepZzzAbove(centerX, centerY, spriteSize) {
+    const zzz = getCachedPortrait(sleepZzzSrc());
+    if (!zzz || !zzz.complete || !zzz.naturalWidth) return;
+    const zw = spriteSize * 0.45;
+    const zh = zw * (zzz.naturalHeight / zzz.naturalWidth);
+    ctx.drawImage(zzz, centerX - zw / 2, centerY - spriteSize * 0.55 - zh, zw, zh);
+}
+
+function drawGroundCasualties(visibleTiles) {
+    const size = ARENA_GRID.cellSize;
+    const spriteSize = size * 0.45;
+    const now = performance.now();
+
+    groundCasualties.forEach(c => {
+        if (visibleTiles && !isTileVisible(visibleTiles, c.x, c.y)) return;
+        if (c.phase === 'tipping' && now - c.tipStart >= CASUALTY_MAP_TIP_MS) {
+            c.phase = 'sleep';
+        }
+
+        const tilePx = ARENA_GRID.offsetX + (c.x * size) + size / 2 + c.ox;
+        const tilePy = ARENA_GRID.offsetY + (c.y * size) + size / 2 + c.oy;
+
+        if (c.phase === 'tipping') {
+            const t = Math.min(1, (now - c.tipStart) / CASUALTY_MAP_TIP_MS);
+            const img = getCachedPortrait(teamPortraitSrc(c.role, c.faction, 1));
+            if (!img || !img.complete || !img.naturalWidth) return;
+            ctx.save();
+            ctx.imageSmoothingEnabled = true;
+            if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+            ctx.translate(tilePx, tilePy + spriteSize * 0.35);
+            // Match theatre: face first, then tip in local space so lean is always "backwards".
+            if (c.faceLeft) ctx.scale(-1, 1);
+            ctx.rotate(-t * (45 * Math.PI / 180));
+            ctx.drawImage(img, -spriteSize / 2, -spriteSize, spriteSize, spriteSize);
+            ctx.restore();
+            return;
+        }
+
+        // Sleeping body (art is already horizontal).
+        const sleepImg = getCachedPortrait(teamSleepPortraitSrc(c.role, c.faction));
+        if (!sleepImg || !sleepImg.complete || !sleepImg.naturalWidth) return;
+        const drawW = spriteSize * 1.15 * sleepPortraitScale(c.role);
+        const drawH = drawW * (sleepImg.naturalHeight / sleepImg.naturalWidth);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
+        ctx.translate(tilePx, tilePy);
+        if (c.faceLeft) ctx.scale(-1, 1);
+        ctx.drawImage(sleepImg, -drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+        drawSleepZzzAbove(tilePx, tilePy, spriteSize);
+    });
 }
 
 // --- Arena map party sprites (2×2 portraits on a tile) ---
@@ -847,6 +1103,10 @@ function resetPartyVisualState() {
     for (const key of Object.keys(heroIdlePhaseByKey)) delete heroIdlePhaseByKey[key];
     for (const key of Object.keys(heroWalkPhaseByKey)) delete heroWalkPhaseByKey[key];
     for (const uid of Object.keys(walkAnimActiveUids)) delete walkAnimActiveUids[uid];
+    groundCasualties = [];
+    pendingMapFalls = [];
+    panelCasualtyTips = {};
+    combatTelegraph = null;
 }
 
 function shuffleCornerSlots() {
@@ -940,22 +1200,24 @@ function drawPartySpritesOnTile(ap, tileX, tileY, cornerBand) {
 
         const memberKey = `${ap.uid}:${memberIndex}`;
         const isWalking = !!walkAnimActiveUids[ap.uid];
-        // Idle fidget whenever standing still on the arena map; walk cycle always wins.
-        const allowIdleAnim = !isWalking;
+        // Idle fidget whenever standing still on the arena map; walk / telegraph jump win.
+        const jumpPx = getCombatTelegraphJumpPx(ap.uid, spriteSize);
+        const allowIdleAnim = !isWalking && jumpPx <= 0;
         const frame = (allowIdleAnim && isHeroIdleFlashing(memberKey)) ? 2 : 1;
         const src = teamPortraitSrc(member.role, ap.faction, frame);
         const walkPose = isWalking ? getWalkPose(memberKey) : null;
         const img = getCachedPortrait(src);
+        const drawY = tileY - jumpPx;
         if (!img || !img.complete || !img.naturalWidth) {
             // Fallback to frame 1 if frame 2 hasn't loaded yet
             const fallback = getCachedPortrait(teamPortraitSrc(member.role, ap.faction, 1));
             if (!fallback || !fallback.complete || !fallback.naturalWidth) return;
-            drawOnePortrait(fallback, tileX, tileY, cornerOffset[corner], spriteSize, pad, faceLeft, walkPose);
+            drawOnePortrait(fallback, tileX, drawY, cornerOffset[corner], spriteSize, pad, faceLeft, walkPose);
             return;
         }
 
         const off = cornerOffset[corner];
-        drawOnePortrait(img, tileX, tileY, off, spriteSize, pad, faceLeft, walkPose);
+        drawOnePortrait(img, tileX, drawY, off, spriteSize, pad, faceLeft, walkPose);
     });
 }
 
@@ -989,15 +1251,19 @@ function syncArenaCanvasSize() {
 }
 
 // options.faction: if 'p1' or 'p2', use arena team portraits; otherwise neutral art.
+// options.animateCasualtyTips: when true, play tip→sleep for newly KO'd members in panelCasualtyTips.
 function renderHeroCards(container, heroes, options) {
     if (!container) return;
     const faction = options && options.faction;
+    const animateTips = !!(options && options.animateCasualtyTips);
+    const partyUid = options && options.partyUid;
     container.innerHTML = '';
-    heroes.forEach(h => {
+    heroes.forEach((h, memberIndex) => {
         const card = document.createElement('div');
         card.className = 'hero-card';
         const stats = LOCAL_HERO_TEMPLATES[h.role] || h;
         const baseHp = h.baseHp !== undefined ? h.baseHp : stats.hp;
+        const isUnconscious = h.hp !== undefined && h.hp <= 0;
         let hpText;
         if (h.hp !== undefined) {
             hpText = h.hp > 0 ? `${h.hp}/${baseHp} HP` : 'UNCONSCIOUS';
@@ -1006,22 +1272,46 @@ function renderHeroCards(container, heroes, options) {
         }
 
         let portraitSrc = null;
-        if ((faction === 'p1' || faction === 'p2') && HERO_PORTRAITS_TEAM[h.role]) {
+        let tipping = false;
+        if (isUnconscious && (faction === 'p1' || faction === 'p2')) {
+            const tipKey = partyUid != null ? `${partyUid}:${memberIndex}` : null;
+            const tipStart = tipKey ? panelCasualtyTips[tipKey] : null;
+            if (animateTips && tipStart && performance.now() - tipStart < CASUALTY_MAP_TIP_MS) {
+                portraitSrc = teamPortraitSrc(h.role, faction, 1);
+                tipping = true;
+            } else {
+                portraitSrc = teamSleepPortraitSrc(h.role, faction);
+                if (tipKey && tipStart) delete panelCasualtyTips[tipKey];
+            }
+        } else if ((faction === 'p1' || faction === 'p2') && HERO_PORTRAITS_TEAM[h.role]) {
             portraitSrc = HERO_PORTRAITS_TEAM[h.role][faction];
         } else {
             portraitSrc = HERO_PORTRAITS[h.role] || null;
         }
+
+        const tipClass = tipping ? ' tipping' : '';
+        const sleepClass = isUnconscious && !tipping ? ' sleeping' : '';
+        const peasantSleepClass = (isUnconscious && !tipping && h.role === 'Peasant') ? ' sleep-peasant' : '';
         const portraitHtml = portraitSrc
-            ? `<img src="${portraitSrc}" alt="${h.role}">`
-            : '';
+            ? `<div class="hero-portrait${tipClass}${sleepClass}${peasantSleepClass}">`
+                + `<img class="hero-portrait-img" src="${portraitSrc}" alt="${h.role}">`
+                + (isUnconscious && !tipping ? `<img class="sleep-zzz" alt="">` : '')
+                + `</div>`
+            : `<div class="hero-portrait"></div>`;
 
         card.innerHTML =
-            `<div class="hero-portrait">${portraitHtml}</div>`
+            portraitHtml
             + `<div class="hero-card-body">`
             + `<h4>${h.role.toUpperCase()}</h4>`
             + `<p>❤ ${hpText} | ${heroAttackLabel(stats)}</p>`
             + `</div>`;
         container.appendChild(card);
+
+        // Keep Zzz frames cycling while this panel is visible.
+        if (isUnconscious && !tipping) {
+            const zzz = card.querySelector('.sleep-zzz');
+            if (zzz) zzz.src = sleepZzzSrc();
+        }
     });
 }
 
@@ -1164,6 +1454,18 @@ function syncLocalPlansFromArena(resetPaths) {
     }
 }
 
+// End-of-match STATE_SYNC must not yank us off the arena while resolve-round is still playing.
+// GAME_OVER_SUMMARY is queued in pendingGameOverSummary and applied in finishRoundAnimation.
+function shouldDeferGameOverScreen() {
+    return isPlayingRoundAnimation || !!pendingGameOverSummary;
+}
+
+function switchScreenFromSync(serverRoom) {
+    if (!serverRoom) return;
+    if (serverRoom === 'GAME_OVER' && shouldDeferGameOverScreen()) return;
+    switchScreen(serverRoom);
+}
+
 function applyStateSync(data) {
     const serverRoom = data.roomState;
 
@@ -1173,22 +1475,22 @@ function applyStateSync(data) {
             ? (serverRoom === 'CASTLE')
             : (serverRoom === partyDetailReturnTo);
         if (serverRoom === 'TACTICAL_ARENA' || serverRoom === 'GAME_OVER' || serverRoom === 'LANDING') {
-            switchScreen(serverRoom);
+            switchScreenFromSync(serverRoom);
         } else if (!okReturn && serverRoom) {
-            switchScreen(serverRoom);
+            switchScreenFromSync(serverRoom);
         }
     } else if (currentRoomState === 'MISSION_BRIEFING') {
         if (serverRoom === 'TACTICAL_ARENA' || serverRoom === 'GAME_OVER' || serverRoom === 'LANDING') {
-            switchScreen(serverRoom);
+            switchScreenFromSync(serverRoom);
         } else if (serverRoom && serverRoom !== 'CASTLE' && serverRoom !== 'TOWN_HQ') {
             // stay on briefing while still in castle hub flow; Town means they navigated away
-            if (serverRoom === 'TAVERN') switchScreen(serverRoom);
+            if (serverRoom === 'TAVERN') switchScreenFromSync(serverRoom);
         } else if (serverRoom === 'TOWN_HQ') {
-            switchScreen(serverRoom);
+            switchScreenFromSync(serverRoom);
         }
         // CASTLE → keep briefing open
     } else if (serverRoom) {
-        switchScreen(serverRoom);
+        switchScreenFromSync(serverRoom);
     }
 
     if (data.lobby) {
@@ -1359,7 +1661,11 @@ function renderArenaChrome() {
     renderHeroCards(
         document.getElementById('arena-party-detail-members'),
         selected.members,
-        { faction: selected.faction } // Blue/Red tinted portraits in the arena only
+        {
+            faction: selected.faction,
+            partyUid: selected.uid,
+            animateCasualtyTips: true
+        }
     );
 }
 
@@ -1768,26 +2074,108 @@ function placeCombatTheatreHeroes(halfEl, party, faceLeft) {
         img.alt = member.role;
         img.dataset.uid = party.uid;
         img.dataset.memberIndex = String(memberIndex);
+        img.dataset.role = member.role;
+        img.dataset.faction = party.faction;
         img.dataset.faceLeft = faceLeft ? '1' : '0';
         img.style.left = pos.left + '%';
         img.style.top = pos.top + '%';
-        img.style.transform = combatTheatreHeroTransform(img, false);
+        img.style.width = '22%';
+        img.dataset.baseWidthPct = '22';
+        img.style.transform = combatTheatreHeroTransform(img, 'upright');
         halfEl.appendChild(img);
     });
 }
 
-function combatTheatreHeroTransform(heroEl, knockedOut) {
+// mode: 'upright' | 'tip' | 'sleep'
+function combatTheatreHeroTransform(heroEl, mode) {
     const faceLeft = heroEl && heroEl.dataset.faceLeft === '1';
     const parts = ['translate(-50%, -50%)'];
-    if (knockedOut) parts.push('rotate(90deg)');
+    // Face first, then tip in local space: -45° is always "lean back" for these portraits.
     if (faceLeft) parts.push('scaleX(-1)');
+    if (mode === 'tip') parts.push('rotate(-45deg)');
     return parts.join(' ');
+}
+
+function attachTheatreSleepZzz(heroEl) {
+    if (!heroEl || !heroEl.parentElement) return;
+    let wrap = heroEl.parentElement.querySelector(
+        `.combat-theatre-zzz[data-uid="${heroEl.dataset.uid}"][data-member-index="${heroEl.dataset.memberIndex}"]`
+    );
+    if (!wrap) {
+        wrap = document.createElement('img');
+        wrap.className = 'combat-theatre-zzz sleep-zzz';
+        wrap.dataset.uid = heroEl.dataset.uid;
+        wrap.dataset.memberIndex = heroEl.dataset.memberIndex;
+        wrap.alt = '';
+        heroEl.parentElement.appendChild(wrap);
+    }
+    wrap.style.left = heroEl.style.left;
+    wrap.style.top = heroEl.style.top;
+    wrap.src = sleepZzzSrc();
+}
+
+// Tip 45°, arc knockback (~hero height) over 1s, then swap to sleep sprite + Zzz.
+function animateTheatreKnockout(heroEl) {
+    return new Promise(resolve => {
+        if (!heroEl || !heroEl.parentElement) {
+            resolve();
+            return;
+        }
+        const parent = heroEl.parentElement;
+        const faceLeft = heroEl.dataset.faceLeft === '1';
+        const knockDir = faceLeft ? 1 : -1; // fall away from the opponent in the centre
+        const startLeft = parseFloat(heroEl.style.left) || 50;
+        const startTop = parseFloat(heroEl.style.top) || 50;
+        const heroH = heroEl.offsetHeight || Math.max(40, parent.clientHeight * 0.22);
+        const distPctX = (heroH / Math.max(1, parent.clientWidth)) * 100;
+        const peakPctY = (heroH * 0.35 / Math.max(1, parent.clientHeight)) * 100;
+
+        heroEl.classList.add('is-ko');
+        heroEl.style.transform = combatTheatreHeroTransform(heroEl, 'tip');
+
+        const start = performance.now();
+        function frame(now) {
+            const t = Math.min(1, (now - start) / CASUALTY_THEATRE_ARC_MS);
+            const arcUp = 4 * peakPctY * t * (1 - t);
+            heroEl.style.left = (startLeft + knockDir * distPctX * t) + '%';
+            heroEl.style.top = (startTop - arcUp) + '%';
+            if (t < 1) {
+                requestAnimationFrame(frame);
+            } else {
+                const sleepSrc = teamSleepPortraitSrc(heroEl.dataset.role, heroEl.dataset.faction);
+                if (sleepSrc) heroEl.src = sleepSrc;
+                heroEl.dataset.sleeping = '1';
+                // Peasant rake makes the sleep sprite look small — bump display size.
+                if (heroEl.dataset.role === 'Peasant') {
+                    const baseW = parseFloat(heroEl.dataset.baseWidthPct || '') || parseFloat(heroEl.style.width) || 22;
+                    if (!heroEl.dataset.baseWidthPct) heroEl.dataset.baseWidthPct = String(baseW);
+                    heroEl.style.width = (baseW * sleepPortraitScale('Peasant')) + '%';
+                }
+                heroEl.style.transform = combatTheatreHeroTransform(heroEl, 'sleep');
+                attachTheatreSleepZzz(heroEl);
+                resolve();
+            }
+        }
+        requestAnimationFrame(frame);
+    });
 }
 
 function getCombatTheatreHeroEl(uid, memberIndex) {
     return document.querySelector(
         `.combat-theatre-hero[data-uid="${uid}"][data-member-index="${memberIndex}"]`
     );
+}
+
+// When the map pane is small, a 50% fight window is too cramped — fill the whole map slot.
+// (Also avoids the old bug where the theatre lived inside scroll content and opened off-screen.)
+function shouldCombatTheatreFillMap() {
+    const frame = document.getElementById('arena-map-frame')
+        || document.getElementById('arena-map-scroll');
+    if (!frame) return false;
+    const w = frame.clientWidth;
+    const h = frame.clientHeight;
+    // ~half-size window stops feeling like an overlay once the pane is phone-sized.
+    return w < 560 || h < 380;
 }
 
 function openCombatTheatre(combat) {
@@ -1808,6 +2196,7 @@ function openCombatTheatre(combat) {
         placeCombatTheatreHeroes(leftHalf, leftParty, false);
         placeCombatTheatreHeroes(rightHalf, rightParty, true);
 
+        theatre.classList.toggle('is-map-fill', shouldCombatTheatreFillMap());
         theatre.classList.add('is-open');
         theatre.setAttribute('aria-hidden', 'false');
         requestAnimationFrame(() => {
@@ -1827,6 +2216,7 @@ function closeCombatTheatre() {
         theatre.classList.remove('is-expanded');
         setTimeout(() => {
             theatre.classList.remove('is-open');
+            theatre.classList.remove('is-map-fill');
             theatre.setAttribute('aria-hidden', 'true');
             const leftHalf = document.getElementById('combat-half-left');
             const rightHalf = document.getElementById('combat-half-right');
@@ -1853,15 +2243,27 @@ function spawnTheatreFloat(heroEl, damage, color, kind) {
 async function playStrikeUnitHits(strike) {
     const hits = strike.unitHits || [];
     const color = getTeamColor(strike.attackerFaction);
+    const defender = arenaParties.find(p => p.uid === strike.defenderUid);
     for (let i = 0; i < hits.length; i++) {
         const hit = hits[i];
         const heroEl = getCombatTheatreHeroEl(strike.defenderUid, hit.memberIndex);
         spawnTheatreFloat(heroEl, hit.damage, color, strike.kind);
         if (hit.knockedOut && heroEl) {
-            heroEl.classList.add('is-ko');
-            heroEl.style.transform = combatTheatreHeroTransform(heroEl, true);
+            await animateTheatreKnockout(heroEl);
+            if (defender && typeof defender.x === 'number') {
+                // Map sleep faces the way they were walking on the arena, not theatre half.
+                const faceLeft = partyFacesLeft(ensurePartyFacing(defender));
+                queueCasualtyFromKnockout(
+                    defender,
+                    hit.memberIndex,
+                    defender.x,
+                    defender.y,
+                    faceLeft
+                );
+            }
+        } else {
+            await sleepMs(COMBAT_FLOAT_MS);
         }
-        await sleepMs(COMBAT_FLOAT_MS);
     }
 }
 
@@ -1876,6 +2278,7 @@ async function playStepCombats(combats) {
     for (let c = 0; c < combats.length; c++) {
         const combat = combats[c];
         await sleepMs(COMBAT_PAUSE_MS);
+        await playCombatTelegraph(combat);
         await openCombatTheatre(combat);
 
         const waves = combat.waves || [];
@@ -1889,6 +2292,8 @@ async function playStepCombats(combats) {
             applyTimelinePartySnapshot(lastWave.arenaParties, lastWave.groundBooks);
         }
         await closeCombatTheatre();
+        // Map + info panel: tip upright heroes into sleep sprites where they fell.
+        beginPendingMapCasualtyFalls();
     }
 }
 
@@ -1916,11 +2321,6 @@ async function playResolveTimeline(timeline) {
 
         await playStepCombats(step.combats || []);
         applyTimelinePartySnapshot(step.arenaParties, step.groundBooks);
-
-        const isLast = i === timeline.length - 1;
-        if (!isLast) {
-            await sleepMs(ROUND_STEP_GAP_MS);
-        }
     }
 }
 
@@ -1953,6 +2353,19 @@ function finishRoundAnimation(data) {
 
 function applyGameOverSummary(data) {
     switchScreen('GAME_OVER');
+
+    // Full-screen letterboxed art (same contain treatment as the landing splash).
+    const screen = document.getElementById('screen-game-over');
+    if (screen) {
+        let bg = '/assets/backgrounds/end_loss.jpeg';
+        if (data.result === 'VICTORY' || data.result === 'MINOR VICTORY') {
+            bg = '/assets/backgrounds/end_win.jpeg';
+        } else if (data.result === 'DRAW') {
+            bg = '/assets/backgrounds/end_draw.jpeg';
+        }
+        screen.style.backgroundImage = `url('${bg}')`;
+    }
+
     const banner = document.getElementById('game-over-banner');
     if (banner) {
         banner.textContent = data.result;
@@ -2071,6 +2484,9 @@ function drawArenaScreen() {
         drawSpellBookIcon(cx, cy, book.ownerFaction);
     });
 
+    // Unconscious heroes left where they fell (under living tokens / trees that overlap).
+    drawGroundCasualties(visibleTiles);
+
     // --- Parties + tall props (trees / towers), row by row, top → bottom ---
     // Props are bottom-aligned and overlap the tile above. Draw order per row:
     //   1) top-row heroes on prop tiles (behind their tree/tower)
@@ -2165,6 +2581,9 @@ function drawArenaScreen() {
         if (drawDeploy) drawDeploymentBoundary(myFaction, 'front', y);
     }
 
+    // Pre-fight ! / ? icons (drawn above parties so they stay readable).
+    drawCombatTelegraphIcons();
+
     // Outline on the selected living party's tile (deployment AND combat).
     if (selected && partyIsAlive(selected) && typeof selected.x === 'number' && typeof selected.y === 'number') {
         const drawTile = getPartyDrawTile(selected);
@@ -2184,6 +2603,11 @@ function renderActiveScene() {
     syncArenaCanvasSize();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawArenaScreen();
+    // Cycle Zzz icons on any unconscious portraits currently in the DOM.
+    const zzzSrc = sleepZzzSrc();
+    document.querySelectorAll('.sleep-zzz').forEach(el => {
+        if (el.getAttribute('src') !== zzzSrc) el.src = zzzSrc;
+    });
 }
 
 function startGameLoop() {
@@ -2202,6 +2626,8 @@ function loadGameAssets() {
     preloadRockTiles();
     preloadRoadAndVergeTiles();
     preloadTowerTiles();
+    preloadSleepAssets();
+    preloadCombatIcons();
     startGameLoop();
     switchScreen('LANDING');
 }
@@ -2402,6 +2828,8 @@ socket.on('lobby-status', (data) => {
 
 socket.on('ROOM_TRANSITION', (payload) => {
     // Party detail is client-only — not driven by ROOM_TRANSITION.
+    // GAME_OVER waits for round playback (same rule as STATE_SYNC).
+    if (payload.newState === 'GAME_OVER' && shouldDeferGameOverScreen()) return;
     if (payload.newState === 'TACTICAL_ARENA' || payload.newState === 'GAME_OVER') {
         switchScreen(payload.newState);
     } else if (currentRoomState !== 'PARTY_DETAIL') {

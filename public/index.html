@@ -80,8 +80,10 @@
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            position: relative;
         }
-        .hero-portrait img {
+        .hero-portrait img.hero-portrait-img,
+        .hero-portrait > img:not(.sleep-zzz) {
             max-width: 100%;
             max-height: 100%;
             width: auto;
@@ -90,6 +92,41 @@
             /* Smooth scale (same idea as arena map sprites) */
             image-rendering: auto;
             display: block;
+            transform-origin: center bottom;
+        }
+        .hero-portrait.tipping > img:not(.sleep-zzz) {
+            animation: hero-casualty-tip 0.5s ease-in forwards;
+        }
+        .hero-portrait.sleeping {
+            overflow: visible;
+            width: 52px;
+            flex-basis: 52px;
+        }
+        .hero-portrait.sleeping.sleep-peasant {
+            width: 62px;
+            flex-basis: 62px;
+        }
+        .hero-portrait.sleeping.sleep-peasant > img:not(.sleep-zzz) {
+            max-width: 120%;
+            max-height: 120%;
+            transform: scale(1.2);
+            transform-origin: center center;
+        }
+        .hero-portrait .sleep-zzz {
+            position: absolute;
+            left: 50%;
+            top: -6px;
+            width: 18px;
+            height: auto;
+            max-width: none;
+            max-height: none;
+            transform: translate(-50%, -100%);
+            pointer-events: none;
+            z-index: 2;
+        }
+        @keyframes hero-casualty-tip {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(-45deg); }
         }
 
         /* Subtle grey-on-black scrollbars (only appear when content overflows) */
@@ -220,6 +257,25 @@
             color: var(--ui-body-text);
             font-size: 13px;
             text-align: center;
+        }
+
+        /* Game over: outcome art letterboxed like landing; JS swaps win/draw/loss. */
+        #screen-game-over {
+            align-items: center;
+            justify-content: center;
+            background-color: #000;
+            background-image: url('/assets/backgrounds/end_win.jpeg');
+            background-position: center center;
+            background-repeat: no-repeat;
+            background-size: contain;
+        }
+        #screen-game-over .screen-panel {
+            flex: 0 1 auto;
+            width: min(440px, 92vw);
+            background: rgba(0, 0, 0, 0.55);
+            border: none;
+            box-shadow: none;
+            overflow: visible;
         }
 
         /* Town: letterboxed town art + % positioned tooltip hotspots */
@@ -691,6 +747,15 @@
             font-size: 11px;
             margin-top: 4px;
         }
+        /* Frame owns the visible map slot; theatre overlays it (not the scroll content). */
+        #arena-map-frame {
+            position: relative;
+            flex: 1 1 auto;
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
         #arena-map-scroll {
             position: relative;
             flex: 1 1 auto;
@@ -702,7 +767,7 @@
             border: 2px solid #333;
             touch-action: pan-x pan-y;
         }
-        /* Fire Emblem / Advance Wars style fight window over the map viewport */
+        /* Fight window: pinned to the visible map pane (survives map scroll). */
         .combat-theatre {
             position: absolute;
             inset: 0;
@@ -714,6 +779,10 @@
             background: rgba(0, 0, 0, 0.4);
         }
         .combat-theatre.is-open { display: flex; }
+        /* Small map panes: fight view replaces the whole map area. */
+        .combat-theatre.is-map-fill {
+            background: #111;
+        }
         .combat-theatre-panel {
             width: 50%;
             height: 50%;
@@ -728,6 +797,14 @@
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.65);
             overflow: hidden;
             box-sizing: border-box;
+        }
+        .combat-theatre.is-map-fill .combat-theatre-panel {
+            width: 100%;
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
+            border: none;
+            box-shadow: none;
         }
         .combat-theatre.is-expanded .combat-theatre-panel { transform: scale(1); }
         .combat-theatre-half {
@@ -746,13 +823,23 @@
             height: auto;
             max-width: 72px;
             image-rendering: auto;
-            transform-origin: center center;
-            transition: transform 0.2s ease;
+            transform-origin: center bottom;
+            transition: none;
             filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.55));
             z-index: 1;
         }
         .combat-theatre-hero.is-ko {
-            opacity: 0.9;
+            opacity: 0.95;
+        }
+        .combat-theatre-zzz {
+            position: absolute;
+            width: 12%;
+            max-width: 36px;
+            height: auto;
+            transform: translate(-50%, -120%);
+            pointer-events: none;
+            z-index: 2;
+            filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
         }
         .combat-theatre-float {
             position: absolute;
@@ -1069,15 +1156,17 @@ REWARD: 100g</div>
                     <h3>YOUR PARTIES</h3>
                     <div id="arena-party-list-items"></div>
                 </div>
-                <div id="arena-map-scroll">
+                <div id="arena-map-frame">
+                    <div id="arena-map-scroll">
+                        <div id="arena-map-center">
+                            <canvas id="gameCanvas" width="1100" height="1000"></canvas>
+                        </div>
+                    </div>
                     <div id="combat-theatre" class="combat-theatre" aria-hidden="true">
                         <div class="combat-theatre-panel">
                             <div class="combat-theatre-half" id="combat-half-left"></div>
                             <div class="combat-theatre-half" id="combat-half-right"></div>
                         </div>
-                    </div>
-                    <div id="arena-map-center">
-                        <canvas id="gameCanvas" width="1100" height="1000"></canvas>
                     </div>
                 </div>
                 <div id="arena-party-detail">
