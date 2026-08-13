@@ -2254,11 +2254,49 @@ function terrainColorForCombatTile(tileInfo) {
     return ARENA_TILE_COLORS[terrain] || '#333';
 }
 
+// Fight-window backdrop: left/right art per terrain (stretch-fit on the half panel).
+function setCombatTheatreHalfBackground(halfEl, side, tileInfo) {
+    if (!halfEl) return;
+    const s = side === 'right' ? 'right' : 'left';
+    const terrain = tileInfo && tileInfo.terrain;
+    const sky = `/assets/backgrounds/combat_sky_${s}.png`;
+    const grass = `/assets/backgrounds/combat_grass_${s}.png`;
+    const road = `/assets/backgrounds/combat_road_${s}.png`;
+    const forest = `/assets/backgrounds/combat_forrest_${s}.png`;
+
+    // CSS lists top→bottom layer order (first image paints on top).
+    let layers;
+    if (terrain === 'DG') {
+        layers = `url('${forest}')`;
+    } else if (terrain === 'DGY') {
+        layers = `url('${road}'), url('${sky}')`;
+    } else {
+        // Grass (LG) and any unexpected tile (tower/mountain shouldn't appear).
+        layers = `url('${grass}'), url('${sky}')`;
+    }
+    halfEl.style.backgroundImage = layers;
+    halfEl.style.backgroundSize = '100% 100%';
+    halfEl.style.backgroundPosition = 'center center';
+    halfEl.style.backgroundRepeat = 'no-repeat';
+    halfEl.style.backgroundColor = terrainColorForCombatTile(tileInfo);
+}
+
+function preloadCombatBackgrounds() {
+    ['left', 'right'].forEach(side => {
+        [
+            `combat_sky_${side}`,
+            `combat_grass_${side}`,
+            `combat_road_${side}`,
+            `combat_forrest_${side}`
+        ].forEach(name => getCachedPortrait(`/assets/backgrounds/${name}.png`));
+    });
+}
+
 function randomCombatHeroPos() {
-    // Min 10% from left/right/bottom; min 40% from top → y in [40%, 90%], x in [10%, 90%]
+    // Stay in the bottom 40% of the half (never higher than 40% up from the bottom).
     return {
         left: 10 + Math.random() * 80,
-        top: 40 + Math.random() * 50
+        top: 60 + Math.random() * 30 // 60%–90% from the top
     };
 }
 
@@ -2429,8 +2467,10 @@ function openCombatTheatre(combat) {
         const leftParty = arenaParties.find(p => p.uid === combat.leftUid);
         const rightParty = arenaParties.find(p => p.uid === combat.rightUid);
 
-        leftHalf.style.background = terrainColorForCombatTile(combat.leftTile);
-        rightHalf.style.background = terrainColorForCombatTile(combat.rightTile);
+        leftHalf.style.background = '';
+        rightHalf.style.background = '';
+        setCombatTheatreHalfBackground(leftHalf, 'left', combat.leftTile);
+        setCombatTheatreHalfBackground(rightHalf, 'right', combat.rightTile);
         placeCombatTheatreHeroes(leftHalf, leftParty, false);
         placeCombatTheatreHeroes(rightHalf, rightParty, true);
 
@@ -3154,6 +3194,7 @@ function loadGameAssets() {
     preloadCombatIcons();
     preloadFlashAssets();
     preloadAttackAssets();
+    preloadCombatBackgrounds();
     startGameLoop();
     switchScreen('LANDING');
 }
