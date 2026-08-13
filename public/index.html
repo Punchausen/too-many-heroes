@@ -1036,11 +1036,21 @@
     <div id="screen-landing" class="game-screen active">
         <div class="screen-panel">
             <div style="display: flex; flex-direction: column; align-items: center;">
+                <div id="landing-mode-row" style="display:flex; gap:16px; margin: 0 0 12px 0; color:#fff8e7; font-size:14px;">
+                    <label style="cursor:pointer; display:flex; align-items:center; gap:6px;">
+                        <input type="radio" name="landing-mode" id="landing-mode-single" value="single">
+                        Single Player
+                    </label>
+                    <label style="cursor:pointer; display:flex; align-items:center; gap:6px;">
+                        <input type="radio" name="landing-mode" id="landing-mode-multi" value="multi" checked>
+                        Multiplayer
+                    </label>
+                </div>
                 <input id="input-player-name" class="input-field" type="text" placeholder="Player Name" maxlength="24">
                 <input id="input-room-code" class="input-field" type="text" placeholder="Room Code" value="LOCAL" maxlength="12">
                 <button id="btn-join-game" class="btn-primary">JOIN GAME</button>
             </div>
-            <div class="lobby-status">
+            <div class="lobby-status" id="landing-lobby-status">
                 <p>PLAYER 1: <span id="landing-p1-status">DISCONNECTED</span></p>
                 <p>PLAYER 2: <span id="landing-p2-status">DISCONNECTED</span></p>
             </div>

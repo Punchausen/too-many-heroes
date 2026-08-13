@@ -3074,12 +3074,42 @@ function setJoinWaitingState(waiting) {
     if (!joinBtn) return;
 
     joinBtn.disabled = waiting;
-    joinBtn.textContent = waiting ? 'Waiting for other player' : 'JOIN GAME';
+    if (waiting) {
+        joinBtn.textContent = 'Waiting for other player';
+    } else {
+        joinBtn.textContent = getSelectedLandingMode() === 'single' ? 'START GAME' : 'JOIN GAME';
+    }
     if (nameInput) nameInput.disabled = waiting;
     if (codeInput) codeInput.disabled = waiting;
 }
 
+function getSelectedLandingMode() {
+    const single = document.getElementById('landing-mode-single');
+    return (single && single.checked) ? 'single' : 'multi';
+}
+
+function updateLandingModeUI() {
+    const mode = getSelectedLandingMode();
+    const codeInput = document.getElementById('input-room-code');
+    const lobby = document.getElementById('landing-lobby-status');
+    const lan = document.getElementById('lan-host-info');
+    if (codeInput) {
+        codeInput.style.display = mode === 'single' ? 'none' : '';
+        if (mode === 'single') codeInput.value = 'SOLO';
+        else if (!codeInput.value || codeInput.value === 'SOLO') codeInput.value = 'LOCAL';
+    }
+    if (lobby) lobby.style.display = mode === 'single' ? 'none' : '';
+    if (lan) lan.style.display = mode === 'single' ? 'none' : '';
+    setJoinWaitingState(false);
+}
+
 function wireNavigationButtons() {
+    const modeSingle = document.getElementById('landing-mode-single');
+    const modeMulti = document.getElementById('landing-mode-multi');
+    if (modeSingle) modeSingle.addEventListener('change', updateLandingModeUI);
+    if (modeMulti) modeMulti.addEventListener('change', updateLandingModeUI);
+    updateLandingModeUI();
+
     document.getElementById('btn-join-game').addEventListener('click', () => {
         // User gesture: best chance for fullscreen + orientation.lock on mobile.
         tryLockLandscape();
@@ -3087,12 +3117,16 @@ function wireNavigationButtons() {
         if (joinBtn.disabled) return;
 
         const name = document.getElementById('input-player-name').value.trim();
-        const code = document.getElementById('input-room-code').value.trim();
-        if (!name || !code) return;
+        const mode = getSelectedLandingMode();
+        const code = mode === 'single'
+            ? 'SOLO'
+            : document.getElementById('input-room-code').value.trim();
+        if (!name) return;
+        if (mode === 'multi' && !code) return;
 
         playerName = name;
-        setJoinWaitingState(true);
-        socket.emit('JOIN_GAME', { playerName: name, roomCode: code });
+        if (mode === 'multi') setJoinWaitingState(true);
+        socket.emit('JOIN_GAME', { playerName: name, roomCode: code, mode });
     });
 
     document.getElementById('btn-go-tavern').addEventListener('click', () => {

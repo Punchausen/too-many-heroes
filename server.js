@@ -53,6 +53,8 @@ app.get('/api/host-info', (req, res) => {
 // --- SESSION STATE ---
 let players = {};                       // socket ids for p1 / p2
 let readyStatus = { p1: false, p2: false };
+let singlePlayerMode = false;           // human p1 vs computer p2
+const AI_SOCKET_ID = '__AI_P2__';        // placeholder so p2 slot is "filled"
 let gameStarted = false;
 let currentRound = 1;
 let roomState = 'LANDING';              // LANDING | HUB | TACTICAL_ARENA | GAME_OVER
@@ -179,6 +181,14 @@ function bothPlayersJoinedSameRoom() {
         && playerState.p1.playerName
         && playerState.p2.playerName
         && playerState.p1.roomCode === playerState.p2.roomCode;
+}
+
+function isSinglePlayer() {
+    return !!singlePlayerMode;
+}
+
+function isAiFaction(faction) {
+    return isSinglePlayer() && faction === 'p2';
 }
 
 function pickPartyName(faction) {
@@ -316,7 +326,9 @@ function emitStateSyncTo(socket) {
 
 function emitStateSyncAll() {
     if (players.p1) io.to(players.p1).emit('STATE_SYNC', buildStateSync('p1'));
-    if (players.p2) io.to(players.p2).emit('STATE_SYNC', buildStateSync('p2'));
+    if (players.p2 && !isAiFaction('p2')) {
+        io.to(players.p2).emit('STATE_SYNC', buildStateSync('p2'));
+    }
 }
 
 function transitionSession(newState) {
@@ -340,7 +352,10 @@ function enterHubPhase() {
     playerState.p1.launchPending = false;
     playerState.p2.launchPending = false;
     if (players.p1) io.to(players.p1).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
-    if (players.p2) io.to(players.p2).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+    // Don't emit hub transitions to the AI placeholder socket.
+    if (players.p2 && !isAiFaction('p2')) {
+        io.to(players.p2).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
+    }
     emitStateSyncAll();
 }
 
@@ -608,22 +623,54 @@ function autoDeployFaction(faction) {
     });
 }
 
+function buildAIPeasantParties() {
+    // Fixed spawn around the red (p2) tower; party 4 sits on the far bottom-right tile.
+    // 1 & 3 = tower/book runners; 2 & 4 = hunters. All Advance.
+    const spawns = [
+        { number: 1, x: 8, y: 6, name: 'Tower Watch' },
+        { number: 2, x: 10, y: 6, name: 'Hunt Pack' },
+        { number: 3, x: 8, y: 8, name: 'Book Runners' },
+        { number: 4, x: 10, y: 9, name: 'Corner Blades' }
+    ];
+    return spawns.map(s => ({
+        uid: `p2-${s.number}`,
+        faction: 'p2',
+        number: s.number,
+        name: s.name,
+        members: defaultPeasantSquad(),
+        x: s.x,
+        y: s.y,
+        order: 'Advance',
+        carryingBook: null,
+        aiRole: (s.number === 1 || s.number === 3) ? 'tower' : 'hunt'
+    }));
+}
+
 function startArenaMatch() {
     playerState.p1.launchPending = false;
     playerState.p2.launchPending = false;
     postMatchReturned = { p1: false, p2: false };
 
-    arenaParties = [
-        ...buildArenaFromFielded('p1'),
-        ...buildArenaFromFielded('p2')
-    ];
-
-    autoDeployFaction('p1');
-    autoDeployFaction('p2');
+    if (isSinglePlayer()) {
+        arenaParties = [
+            ...buildArenaFromFielded('p1'),
+            ...buildAIPeasantParties()
+        ];
+        autoDeployFaction('p1');
+        // AI is pre-placed (including the out-of-bounds party 4) and already ready.
+        deployReady = { p1: false, p2: true };
+    } else {
+        arenaParties = [
+            ...buildArenaFromFielded('p1'),
+            ...buildArenaFromFielded('p2')
+        ];
+        autoDeployFaction('p1');
+        autoDeployFaction('p2');
+        deployReady = { p1: false, p2: false };
+    }
 
     roomState = 'TACTICAL_ARENA';
     arenaPhase = 'DEPLOYMENT';
-    deployReady = { p1: false, p2: false };
     currentRound = 1;
     pendingMoves = { p1: null, p2: null };
     firstLockFaction = null;
@@ -651,6 +698,11 @@ function tryBeginCombatFromDeployment() {
 }
 
 function tryStartArenaIfBothPending() {
+    if (isSinglePlayer()) {
+        if (playerState.p1.launchPending) startArenaMatch();
+        else emitStateSyncAll();
+        return;
+    }
     if (playerState.p1.launchPending && playerState.p2.launchPending) {
         startArenaMatch();
     } else {
@@ -1742,6 +1794,157 @@ function applySpilloverDamage(party, totalDamage, appendLog, attackerLabel) {
     }
 }
 
+// ==================== SINGLE-PLAYER AI (p2) ====================
+
+function orthNeighbours(x, y) {
+    return [
+        { x: x + 1, y },
+        { x: x - 1, y },
+        { x, y: y + 1 },
+        { x, y: y - 1 }
+    ];
+}
+
+function tilesOrthAdjacentTo(tile) {
+    if (!tile) return [];
+    return orthNeighbours(tile.x, tile.y).filter(c =>
+        c.x >= 0 && c.x <= GRID_MAX_X && c.y >= 0 && c.y <= GRID_MAX_Y && !isBlockedTile(c.x, c.y)
+    );
+}
+
+function aiCanStepOnto(x, y, faction, snapshot, selfUid, allowFriendlyPass) {
+    if (x < 0 || x > GRID_MAX_X || y < 0 || y > GRID_MAX_Y) return false;
+    if (isBlockedTile(x, y)) return false;
+    if (isEnemyOccupied(x, y, faction, snapshot, selfUid)) return false;
+    if (!allowFriendlyPass && isFriendlyOccupied(x, y, faction, snapshot, selfUid)) return false;
+    return true;
+}
+
+// Shortest orthogonal path (not including start). Goals = array of {x,y}.
+// May pass through friendlies mid-path; never ends on occupied tiles in the returned path
+// (caller still runs validateMultiPartyPath for capacity / engagement cuts).
+function findShortestPathToGoals(start, goals, faction, snapshot, selfUid) {
+    if (!start || typeof start.x !== 'number') return [];
+    const goalKeys = new Set((goals || []).map(g => `${g.x},${g.y}`));
+    if (!goalKeys.size) return [];
+    if (goalKeys.has(`${start.x},${start.y}`)) return [];
+
+    const queue = [{ x: start.x, y: start.y }];
+    const cameFrom = new Map();
+    cameFrom.set(`${start.x},${start.y}`, null);
+
+    while (queue.length) {
+        const cur = queue.shift();
+        const curKey = `${cur.x},${cur.y}`;
+        for (const n of orthNeighbours(cur.x, cur.y)) {
+            const key = `${n.x},${n.y}`;
+            if (cameFrom.has(key)) continue;
+            const isGoal = goalKeys.has(key);
+            // Pass through friendlies only if not the goal (cannot end on them).
+            if (!aiCanStepOnto(n.x, n.y, faction, snapshot, selfUid, !isGoal)) continue;
+            if (isGoal && isAnyOccupied(n.x, n.y, snapshot, selfUid)) continue;
+            cameFrom.set(key, cur);
+            if (isGoal) {
+                const path = [];
+                let walk = n;
+                while (walk && !(walk.x === start.x && walk.y === start.y)) {
+                    path.push({ x: walk.x, y: walk.y });
+                    walk = cameFrom.get(`${walk.x},${walk.y}`);
+                }
+                path.reverse();
+                return path;
+            }
+            queue.push(n);
+        }
+    }
+    return [];
+}
+
+function aiBlueBookOnGround() {
+    return groundBooks.find(b => b.ownerFaction === 'p1') || null;
+}
+
+function aiTowerPartyGoals(ap) {
+    const home = homeBuildingFor('p2');
+    const enemyTower = enemyBuildingFor('p2'); // blue tower
+
+    // Holding the blue book → deliver next to the red mission tower.
+    if (ap.carryingBook === 'p1') {
+        return tilesOrthAdjacentTo(home);
+    }
+    // Blue book on the ground → walk onto that tile to pick it up.
+    const dropped = aiBlueBookOnGround();
+    if (dropped) {
+        return [{ x: dropped.x, y: dropped.y }];
+    }
+    // If another red party already holds the blue book, ignore it and go steal from blue.
+    return tilesOrthAdjacentTo(enemyTower);
+}
+
+function aiNearestEnemy(ap) {
+    let best = null;
+    let bestDist = Infinity;
+    arenaParties.forEach(e => {
+        if (e.faction === ap.faction || !partyIsAlive(e)) return;
+        if (typeof e.x !== 'number' || typeof e.y !== 'number') return;
+        const d = manhattan(ap, e);
+        if (d < bestDist) {
+            bestDist = d;
+            best = e;
+        }
+    });
+    return best;
+}
+
+function aiHuntPartyGoals(ap) {
+    const enemy = aiNearestEnemy(ap);
+    if (!enemy) return [];
+    // Prefer ending adjacent (melee range). If already adjacent, stay.
+    if (manhattan(ap, enemy) === 1) return [];
+    return tilesOrthAdjacentTo(enemy);
+}
+
+function buildAITurnOrders() {
+    const byNumber = {};
+    // Working snapshot so later parties path around earlier planned end tiles.
+    const snapshot = arenaParties.map(ap => ({
+        uid: ap.uid,
+        faction: ap.faction,
+        x: ap.x,
+        y: ap.y,
+        members: ap.members,
+        carryingBook: ap.carryingBook
+    }));
+
+    for (let num = 1; num <= 4; num++) {
+        const ap = arenaParties.find(p => p.faction === 'p2' && p.number === num);
+        if (!ap || !partyIsAlive(ap) || typeof ap.x !== 'number') continue;
+
+        const role = (num === 1 || num === 3) ? 'tower' : 'hunt';
+        const goals = role === 'tower' ? aiTowerPartyGoals(ap) : aiHuntPartyGoals(ap);
+        const fullPath = findShortestPathToGoals(ap, goals, 'p2', snapshot, ap.uid);
+        const path = validateMultiPartyPath(ap, fullPath, 'Advance', snapshot);
+        byNumber[num] = { order: 'Advance', path };
+
+        if (path.length) {
+            const end = path[path.length - 1];
+            const snap = snapshot.find(p => p.uid === ap.uid);
+            if (snap) {
+                snap.x = end.x;
+                snap.y = end.y;
+            }
+        }
+    }
+    return { byNumber };
+}
+
+function lockAITurnAfterHuman() {
+    if (!isSinglePlayer() || arenaPhase !== 'COMBAT') return false;
+    if (!pendingMoves.p1 || pendingMoves.p2) return false;
+    pendingMoves.p2 = buildAITurnOrders();
+    return true;
+}
+
 // ==================== SOCKET HANDLERS ====================
 
 initPlayerState();
@@ -1752,7 +1955,7 @@ io.on('connection', (socket) => {
     } else if (!players.p1) {
         players.p1 = socket.id;
         socket.emit('assign-player', { faction: 'p1', gameStarted: false });
-    } else if (!players.p2) {
+    } else if (!players.p2 && !singlePlayerMode) {
         players.p2 = socket.id;
         socket.emit('assign-player', { faction: 'p2', gameStarted: false });
     } else {
@@ -1765,10 +1968,40 @@ io.on('connection', (socket) => {
     socket.on('JOIN_GAME', (data) => {
         const faction = getFactionForSocket(socket);
         if (!faction || roomState !== 'LANDING') return;
-        if (!data.playerName || !data.roomCode) return;
+        if (!data.playerName) return;
 
+        const mode = data.mode === 'single' ? 'single' : 'multi';
+        const roomCode = String(data.roomCode || (mode === 'single' ? 'SOLO' : '')).trim();
+        if (!roomCode) return;
+
+        if (mode === 'single') {
+            // Human is always blue (p1). Computer fills the red slot.
+            // If this browser was seated as p2, move them into the p1 seat.
+            if (faction === 'p2') {
+                players.p1 = socket.id;
+                players.p2 = null;
+                socket.emit('assign-player', { faction: 'p1', gameStarted: false });
+            } else if (faction !== 'p1') {
+                return;
+            }
+            singlePlayerMode = true;
+            players.p2 = AI_SOCKET_ID;
+            playerState.p1.playerName = String(data.playerName).trim();
+            playerState.p1.roomCode = roomCode;
+            playerState.p2.playerName = 'Computer';
+            playerState.p2.roomCode = roomCode;
+            gameStarted = true;
+            initPlayerState();
+            playerState.p2.playerName = 'Computer';
+            playerState.p2.roomCode = roomCode;
+            resetArenaState();
+            enterHubPhase();
+            return;
+        }
+
+        singlePlayerMode = false;
         playerState[faction].playerName = String(data.playerName).trim();
-        playerState[faction].roomCode = String(data.roomCode).trim();
+        playerState[faction].roomCode = roomCode;
 
         if (bothPlayersJoinedSameRoom()) {
             gameStarted = true;
@@ -1799,6 +2032,13 @@ io.on('connection', (socket) => {
         postMatchReturned[faction] = true;
         playerState[faction].currentRoom = 'TOWN_HQ';
         playerState[faction].launchPending = false;
+
+        // Single-player: computer leaves the results screen with you.
+        if (isSinglePlayer()) {
+            postMatchReturned.p2 = true;
+            playerState.p2.currentRoom = 'TOWN_HQ';
+            playerState.p2.launchPending = false;
+        }
 
         io.to(socket.id).emit('ROOM_TRANSITION', { newState: 'TOWN_HQ' });
         emitStateSyncTo(socket);
@@ -1949,6 +2189,12 @@ io.on('connection', (socket) => {
 
         pendingMoves[data.faction] = { byNumber };
 
+        // Single-player: AI paths were "ready from turn start" — lock them the moment you do.
+        if (lockAITurnAfterHuman()) {
+            resolveRoundSimulation();
+            return;
+        }
+
         if (pendingMoves.p1 && pendingMoves.p2) {
             resolveRoundSimulation();
         } else {
@@ -1959,7 +2205,9 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         if (players.p1 === socket.id) { players.p1 = null; readyStatus.p1 = false; }
         if (players.p2 === socket.id) { players.p2 = null; readyStatus.p2 = false; }
-        if (!players.p1 && !players.p2) {
+        if (!players.p1 && (!players.p2 || players.p2 === AI_SOCKET_ID)) {
+            players.p2 = null;
+            singlePlayerMode = false;
             gameStarted = false;
             roomState = 'LANDING';
             resetArenaState();
