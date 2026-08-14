@@ -1118,8 +1118,9 @@ function resolveRangedPairTheatre(pair, roundLog) {
 }
 
 // After one move step: optional ranged pair-fights, then melee pair-fights (theatre waves).
-// allowRanged: only true after EVERY party has finished this turn's walking (last step / hold round).
-// That way range-2 never interrupts mid-path: all planned moves resolve, then shoot if still at 2.
+// allowRanged: when true, ranged is evaluated this beat (still requires shooter+target finished
+// their own path — move→move→shoot per party). Melee always runs when allowRanged is used
+// after a move beat; callers pass true after every Move N check.
 function resolveStepCombat(meleePairsDone, rangedDone, roundLog, finishedMoveUids, allowRanged) {
     const combats = [];
     const hasFinishedMove = (uid) => !finishedMoveUids || finishedMoveUids.has(uid);
@@ -1275,147 +1276,144 @@ function resolveSteppedMovementAndCombat(roundLog) {
 
     roundLog += `<br>🚶 Stepped movement (${maxSteps} step${maxSteps === 1 ? '' : 's'})<br>`;
 
-    // No one moved — still allow a combat check (parties already in range).
-    const stepCount = Math.max(maxSteps, 1);
-    const movementSteps = maxSteps;
+    // Helper: combat check at current live positions (call ONLY after moves for this beat,
+    // or once when everyone held — never before Move 1 when someone has a path).
+    function runCombatCheck(stepIndexForLog, allowRanged) {
+        const finishedMoveUids = new Set();
+        plans.forEach(plan => {
+            if (!partyIsAlive(plan.ap)) return;
+            // No path cells left after this beat (holders / finished short orders).
+            if (plan.path.length <= stepIndexForLog + 1) finishedMoveUids.add(plan.ap.uid);
+        });
+        if (maxSteps === 0) {
+            arenaParties.forEach(ap => {
+                if (partyIsAlive(ap)) finishedMoveUids.add(ap.uid);
+            });
+        }
 
-    for (let step = 0; step < stepCount; step++) {
+        const label = maxSteps === 0
+            ? 'After hold (no moves this day)'
+            : `After move ${stepIndexForLog + 1}`;
+        let log = roundLog + `<br>⚔ ${label}${allowRanged ? '' : ' (melee only)'}<br>`;
+        const combatResult = resolveStepCombat(
+            meleePairsDone, rangedDone, log, finishedMoveUids, allowRanged
+        );
+        roundLog = combatResult.roundLog;
+        if (!(combatResult.combats || []).length) roundLog += ' -> No engagements.<br>';
+        return combatResult.combats || [];
+    }
+
+    // Everyone held: one combat check at current tiles (no pre-move phase when paths exist).
+    if (maxSteps === 0) {
+        const combats = runCombatCheck(0, true);
+        timeline.push({
+            moves: [],
+            combats,
+            hasCombat: combats.length > 0,
+            arenaParties: publicArenaParties(),
+            groundBooks: snapshotGroundBooks()
+        });
+        plans.forEach(plan => {
+            if (plan.path.length === 0) {
+                roundLog += ` -> ${plan.ap.name} held at (${plan.start.x},${plan.start.y}).<br>`;
+            }
+        });
+        return { roundLog, timeline };
+    }
+
+    // Paths exist: Move 1 → combat → Move 2 → combat → … (never combat before Move 1).
+    for (let step = 0; step < maxSteps; step++) {
         const moves = [];
-        const isMoveStep = step < movementSteps;
 
-        if (isMoveStep) {
-            // Intended one-tile moves this step (alive parties that still have path left).
-            // Adjacent enemies do not cancel paths — only blocked / contested tiles below.
-            let intended = plans
-                .filter(plan => partyIsAlive(plan.ap) && step < plan.path.length)
-                .map(plan => ({
-                    plan,
-                    from: { x: plan.ap.x, y: plan.ap.y },
-                    to: { x: plan.path[step].x, y: plan.path[step].y }
-                }));
+        // --- 1) Move one square ---
+        let intended = plans
+            .filter(plan => partyIsAlive(plan.ap) && step < plan.path.length)
+            .map(plan => ({
+                plan,
+                from: { x: plan.ap.x, y: plan.ap.y },
+                to: { x: plan.path[step].x, y: plan.path[step].y }
+            }));
 
-            // Resolve blocked / contested destinations until stable.
-            let safety = 0;
-            let changed = true;
-            while (changed && safety < 64) {
-                changed = false;
-                safety += 1;
+        // Resolve blocked / contested destinations until stable.
+        let safety = 0;
+        let changed = true;
+        while (changed && safety < 64) {
+            changed = false;
+            safety += 1;
 
-                const leaving = new Set(intended.map(m => m.plan.ap.uid));
+            const leaving = new Set(intended.map(m => m.plan.ap.uid));
 
-                // Occupancy:
-                // - Enemy on the tile → always blocked (even if they are also leaving — no swaps /
-                //   pass-through with foes).
-                // - Friend on the tile → blocked only if they are NOT leaving this step.
-                intended = intended.filter(m => {
-                    const holder = arenaParties.find(ap =>
-                        partyIsAlive(ap)
-                        && ap.uid !== m.plan.ap.uid
-                        && ap.x === m.to.x
-                        && ap.y === m.to.y
-                    );
-                    if (!holder) return true;
-                    const isEnemy = holder.faction !== m.plan.ap.faction;
-                    if (isEnemy || !leaving.has(holder.uid)) {
-                        roundLog += ` -> ${m.plan.ap.name} blocked by ${holder.name} at (${m.to.x},${m.to.y}); stops.<br>`;
-                        truncatePlanFromStep(m.plan, step);
-                        changed = true;
-                        return false;
-                    }
-                    return true;
-                });
+            // Occupancy:
+            // - Enemy on the tile → always blocked (even if they are also leaving — no swaps /
+            //   pass-through with foes).
+            // - Friend on the tile → blocked only if they are NOT leaving this step.
+            intended = intended.filter(m => {
+                const holder = arenaParties.find(ap =>
+                    partyIsAlive(ap)
+                    && ap.uid !== m.plan.ap.uid
+                    && ap.x === m.to.x
+                    && ap.y === m.to.y
+                );
+                if (!holder) return true;
+                const isEnemy = holder.faction !== m.plan.ap.faction;
+                if (isEnemy || !leaving.has(holder.uid)) {
+                    roundLog += ` -> ${m.plan.ap.name} blocked by ${holder.name} at (${m.to.x},${m.to.y}); stops.<br>`;
+                    truncatePlanFromStep(m.plan, step);
+                    changed = true;
+                    return false;
+                }
+                return true;
+            });
 
-                // Contest: March > Advance > Guard, then firstLockFaction.
-                const byEnd = new Map();
-                intended.forEach(m => {
-                    const key = `${m.to.x},${m.to.y}`;
-                    if (!byEnd.has(key)) byEnd.set(key, []);
-                    byEnd.get(key).push(m);
-                });
-
-                const winners = [];
-                byEnd.forEach((group) => {
-                    if (group.length === 1) {
-                        winners.push(group[0]);
-                        return;
-                    }
-                    group.sort((a, b) => compareStepMovePriority(a.plan, b.plan));
-                    winners.push(group[0]);
-                    for (let i = 1; i < group.length; i++) {
-                        const loser = group[i];
-                        roundLog += ` -> ${loser.plan.ap.name} loses tile (${loser.to.x},${loser.to.y}) to ${group[0].plan.ap.name}; stops at (${loser.from.x},${loser.from.y}).<br>`;
-                        truncatePlanFromStep(loser.plan, step);
-                        changed = true;
-                    }
-                });
-                intended = winners;
-            }
-
-            // Apply surviving moves + pick up books while stepping through.
+            // Contest: March > Advance > Guard, then firstLockFaction.
+            const byEnd = new Map();
             intended.forEach(m => {
-                m.plan.ap.x = m.to.x;
-                m.plan.ap.y = m.to.y;
-                moves.push({
-                    uid: m.plan.ap.uid,
-                    from: m.from,
-                    to: { x: m.to.x, y: m.to.y }
-                });
-                roundLog += ` -> ${m.plan.ap.name} steps to (${m.to.x},${m.to.y}).<br>`;
-                roundLog = tryPickupGroundBook(m.plan.ap, roundLog);
+                const key = `${m.to.x},${m.to.y}`;
+                if (!byEnd.has(key)) byEnd.set(key, []);
+                byEnd.get(key).push(m);
             });
+
+            const winners = [];
+            byEnd.forEach((group) => {
+                if (group.length === 1) {
+                    winners.push(group[0]);
+                    return;
+                }
+                group.sort((a, b) => compareStepMovePriority(a.plan, b.plan));
+                winners.push(group[0]);
+                for (let i = 1; i < group.length; i++) {
+                    const loser = group[i];
+                    roundLog += ` -> ${loser.plan.ap.name} loses tile (${loser.to.x},${loser.to.y}) to ${group[0].plan.ap.name}; stops at (${loser.from.x},${loser.from.y}).<br>`;
+                    truncatePlanFromStep(loser.plan, step);
+                    changed = true;
+                }
+            });
+            intended = winners;
         }
 
-        // Combat after each move step; also once when nobody moved (step 0 only).
-        let combats = [];
-        if (isMoveStep || movementSteps === 0) {
-            // Who has no further path left after this step (holds / short orders count as finished).
-            const finishedMoveUids = new Set();
-            plans.forEach(plan => {
-                if (!partyIsAlive(plan.ap)) return;
-                // path.length <= step+1 → no cells remain after this step.
-                if (plan.path.length <= step + 1) finishedMoveUids.add(plan.ap.uid);
+        // Apply surviving moves + pick up books while stepping through.
+        intended.forEach(m => {
+            m.plan.ap.x = m.to.x;
+            m.plan.ap.y = m.to.y;
+            moves.push({
+                uid: m.plan.ap.uid,
+                from: m.from,
+                to: { x: m.to.x, y: m.to.y }
             });
-            // Hold-only round: everyone is "finished" (no one is mid-path).
-            if (movementSteps === 0) {
-                arenaParties.forEach(ap => {
-                    if (partyIsAlive(ap)) finishedMoveUids.add(ap.uid);
-                });
-            }
+            roundLog += ` -> ${m.plan.ap.name} steps to (${m.to.x},${m.to.y}).<br>`;
+            roundLog = tryPickupGroundBook(m.plan.ap, roundLog);
+        });
 
-            // Ranged only after the LAST walk step of the round (or hold-only).
-            // Stops "already at range 2 → shoot immediately" while other / longer paths still move.
-            const allowRanged = (movementSteps === 0) || (step === movementSteps - 1);
+        // --- 2) Then check valid targets / combat (melee every beat; ranged if both finished) ---
+        const combats = runCombatCheck(step, true);
 
-            roundLog += `<br>⚔ After step ${isMoveStep ? step + 1 : 0}${allowRanged ? '' : ' (melee only)'}<br>`;
-            const combatResult = resolveStepCombat(
-                meleePairsDone, rangedDone, roundLog, finishedMoveUids, allowRanged
-            );
-            combats = combatResult.combats || [];
-            roundLog = combatResult.roundLog;
-            if (!combats.length) roundLog += ' -> No engagements.<br>';
-        }
-
-        // Hold-only round: one combat timeline frame, no moves.
-        if (!isMoveStep && movementSteps === 0) {
-            timeline.push({
-                moves: [],
-                combats,
-                hasCombat: combats.length > 0,
-                arenaParties: publicArenaParties(),
-                groundBooks: snapshotGroundBooks()
-            });
-            break;
-        }
-
-        if (isMoveStep) {
-            timeline.push({
-                moves,
-                combats,
-                hasCombat: combats.length > 0,
-                arenaParties: publicArenaParties(),
-                groundBooks: snapshotGroundBooks()
-            });
-        }
+        timeline.push({
+            moves,
+            combats,
+            hasCombat: combats.length > 0,
+            arenaParties: publicArenaParties(),
+            groundBooks: snapshotGroundBooks()
+        });
     }
 
     plans.forEach(plan => {
