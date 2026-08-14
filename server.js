@@ -512,14 +512,6 @@ function isAnyOccupied(x, y, snapshot, skipUid) {
     return partyAtTile(x, y, snapshot, skipUid) !== null;
 }
 
-function isAdjacentToLivingEnemy(x, y, faction, snapshot) {
-    return snapshot.some(ap =>
-        ap.faction !== faction
-        && partyIsAlive(ap)
-        && manhattan({ x, y }, ap) === 1
-    );
-}
-
 // Validate one party's path for multi-party rules (see spec in user requirements).
 function validateMultiPartyPath(party, rawPath, order, snapshot) {
     if (!Array.isArray(rawPath)) rawPath = [];
@@ -549,14 +541,7 @@ function validateMultiPartyPath(party, rawPath, order, snapshot) {
         valid.push({ x: cell.x, y: cell.y });
         ax = cell.x;
         ay = cell.y;
-
-        // Melee engagement (1 away): stop here. Range 2 does not cut the path.
-        if (isAdjacentToLivingEnemy(ax, ay, party.faction, snapshot)) {
-            if (isFriendlyOccupied(ax, ay, party.faction, snapshot, party.uid)) {
-                valid.pop();
-            }
-            break;
-        }
+        // Melee adjacency does NOT cut the path — only blocked / contested tiles do.
     }
 
     // Final cell must not be occupied by anyone (friend or foe).
@@ -1256,33 +1241,9 @@ function snapshotGroundBooks() {
 }
 
 // Cancel this step and every later step for a plan (party stops where it is).
+// Used when a tile is blocked or contested — not for melee/ranged contact.
 function truncatePlanFromStep(plan, stepIndex) {
     plan.path = plan.path.slice(0, stepIndex);
-}
-
-// Living enemy in an orthogonally adjacent tile (manhattan 1 only — NOT range 2).
-// Same engagement rule as path planning. Range-2 never cancels a path.
-function partyIsAdjacentToLivingEnemy(ap) {
-    if (!partyIsAlive(ap) || typeof ap.x !== 'number') return false;
-    return arenaParties.some(other =>
-        other.uid !== ap.uid
-        && other.faction !== ap.faction
-        && partyIsAlive(other)
-        && typeof other.x === 'number'
-        && manhattan(ap, other) === 1
-    );
-}
-
-// Melee contact only: cancel remaining path. Ranged (2 away) must NOT stop movement.
-function stopPlansEngagedWithEnemy(plans, fromStepIndex, roundLog) {
-    plans.forEach(plan => {
-        if (!partyIsAlive(plan.ap)) return;
-        if (fromStepIndex >= plan.path.length) return;
-        if (!partyIsAdjacentToLivingEnemy(plan.ap)) return;
-        roundLog += ` -> ${plan.ap.name} engaged — stops (cannot pass through / leave while adjacent to an enemy).<br>`;
-        truncatePlanFromStep(plan, fromStepIndex);
-    });
-    return roundLog;
 }
 
 // Step-by-step movement: everyone advances one square together, then combat checks,
@@ -1323,10 +1284,8 @@ function resolveSteppedMovementAndCombat(roundLog) {
         const isMoveStep = step < movementSteps;
 
         if (isMoveStep) {
-            // Already next to an enemy from an earlier step? No more walking this turn.
-            roundLog = stopPlansEngagedWithEnemy(plans, step, roundLog);
-
             // Intended one-tile moves this step (alive parties that still have path left).
+            // Adjacent enemies do not cancel paths — only blocked / contested tiles below.
             let intended = plans
                 .filter(plan => partyIsAlive(plan.ap) && step < plan.path.length)
                 .map(plan => ({
@@ -1404,9 +1363,6 @@ function resolveSteppedMovementAndCombat(roundLog) {
                 roundLog += ` -> ${m.plan.ap.name} steps to (${m.to.x},${m.to.y}).<br>`;
                 roundLog = tryPickupGroundBook(m.plan.ap, roundLog);
             });
-
-            // Just walked into contact? Cancel the rest of the path after this step.
-            roundLog = stopPlansEngagedWithEnemy(plans, step + 1, roundLog);
         }
 
         // Combat after each move step; also once when nobody moved (step 0 only).
@@ -1831,7 +1787,7 @@ function aiCanStepOnto(x, y, faction, snapshot, selfUid, allowFriendlyPass) {
 
 // Shortest orthogonal path (not including start). Goals = array of {x,y}.
 // May pass through friendlies mid-path; never ends on occupied tiles in the returned path
-// (caller still runs validateMultiPartyPath for capacity / engagement cuts).
+// (caller still runs validateMultiPartyPath for capacity / occupied-end cuts).
 function findShortestPathToGoals(start, goals, faction, snapshot, selfUid) {
     if (!start || typeof start.x !== 'number') return [];
     const goalKeys = new Set((goals || []).map(g => `${g.x},${g.y}`));

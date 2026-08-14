@@ -491,8 +491,8 @@ const HERO_PORTRAITS_TEAM = {
     }
 };
 
-// Idle fidget: every 20s show frame 2 for 0.5s. Each unit has its own random phase.
-const IDLE_ANIM_PERIOD_MS = 20000;
+// Idle fidget: every 15s show frame 2 for 0.5s. Each unit has its own random phase.
+const IDLE_ANIM_PERIOD_MS = 15000;
 const IDLE_ANIM_FLASH_MS = 500;
 // key = `${partyUid}:${memberIndex}` → phase offset in [0, PERIOD)
 const heroIdlePhaseByKey = {};
