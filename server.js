@@ -14,7 +14,7 @@ const http = require('http');
 const os = require('os');
 const { Server } = require('socket.io');
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 // Listen on all interfaces so other PCs on your home LAN can connect.
 // Your Windows Firewall "Private network" allow is what keeps this off the public internet.
 const HOST = '0.0.0.0';
