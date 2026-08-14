@@ -3329,7 +3329,13 @@ function wireNavigationButtons() {
                 localPlans[ap.number] = { order: 'Advance', path: [] };
             }
             localPlans[ap.number].order = order;
-            localPlans[ap.number].path = [];
+            // Keep the drawn path when switching orders — only trim if the new order
+            // cannot walk that far (e.g. March → Guard). Wiping here caused "I ordered a
+            // move but they stood still and shot" when players tapped the order again.
+            const cap = getClientMovementCapacity(order, ap.x, ap.y);
+            if ((localPlans[ap.number].path || []).length > cap) {
+                localPlans[ap.number].path = localPlans[ap.number].path.slice(0, cap);
+            }
             updateOrderButtons();
             renderArenaChrome();
         });

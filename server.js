@@ -550,7 +550,7 @@ function validateMultiPartyPath(party, rawPath, order, snapshot) {
         ax = cell.x;
         ay = cell.y;
 
-        // Engagement: adjacent to enemy → stop here (unless that tile is friendly-held).
+        // Melee engagement (1 away): stop here. Range 2 does not cut the path.
         if (isAdjacentToLivingEnemy(ax, ay, party.faction, snapshot)) {
             if (isFriendlyOccupied(ax, ay, party.faction, snapshot, party.uid)) {
                 valid.pop();
@@ -1132,43 +1132,47 @@ function resolveRangedPairTheatre(pair, roundLog) {
     return { waves, roundLog };
 }
 
-// After one move step: ranged pair-fights, then melee pair-fights (theatre waves).
-// finishedMoveUids = parties with no path steps left after this step (required to shoot).
-function resolveStepCombat(meleePairsDone, rangedDone, roundLog, finishedMoveUids) {
+// After one move step: optional ranged pair-fights, then melee pair-fights (theatre waves).
+// allowRanged: only true after EVERY party has finished this turn's walking (last step / hold round).
+// That way range-2 never interrupts mid-path: all planned moves resolve, then shoot if still at 2.
+function resolveStepCombat(meleePairsDone, rangedDone, roundLog, finishedMoveUids, allowRanged) {
     const combats = [];
-    const canShootNow = (uid) => !finishedMoveUids || finishedMoveUids.has(uid);
+    const hasFinishedMove = (uid) => !finishedMoveUids || finishedMoveUids.has(uid);
 
-    // --- Collect ranged pair opportunities (each party shoots at most once this turn) ---
+    // --- Ranged (only once movement for the whole round is done) ---
     const rangedHitsByPair = new Map();
-    INITIATIVE_BANDS.forEach(bandName => {
-        const attackers = arenaParties.filter(ap => ap.order === bandName && partyIsAlive(ap));
-        attackers.forEach(attacker => {
-            if (rangedDone.has(attacker.uid)) return;
-            // Must have finished this turn's movement — no shoot-then-keep-walking.
-            if (!canShootNow(attacker.uid)) return;
-            if (partyRangedOutput(attacker) <= 0) return;
-            const rangedTargets = arenaParties.filter(e =>
-                e.faction !== attacker.faction
-                && partyIsAlive(e)
-                && manhattan(attacker, e) === 2
-                && attackerCanSeeTarget(attacker, e)
-            );
-            if (!rangedTargets.length) return;
+    if (allowRanged) {
+        INITIATIVE_BANDS.forEach(bandName => {
+            const attackers = arenaParties.filter(ap => ap.order === bandName && partyIsAlive(ap));
+            attackers.forEach(attacker => {
+                if (rangedDone.has(attacker.uid)) return;
+                // Belt-and-braces: shooter must have no path left (move → move → shoot).
+                if (!hasFinishedMove(attacker.uid)) return;
+                if (partyRangedOutput(attacker) <= 0) return;
+                const rangedTargets = arenaParties.filter(e =>
+                    e.faction !== attacker.faction
+                    && partyIsAlive(e)
+                    && manhattan(attacker, e) === 2
+                    && attackerCanSeeTarget(attacker, e)
+                    && hasFinishedMove(e.uid)
+                );
+                if (!rangedTargets.length) return;
 
-            rangedDone.add(attacker.uid);
-            rangedTargets.forEach((target) => {
-                const key = meleePairKey(attacker, target);
-                if (!rangedHitsByPair.has(key)) {
-                    rangedHitsByPair.set(key, {
-                        key,
-                        score: combatPairScore(attacker, target),
-                        hits: []
-                    });
-                }
-                rangedHitsByPair.get(key).hits.push({ attacker, target });
+                rangedDone.add(attacker.uid);
+                rangedTargets.forEach((target) => {
+                    const key = meleePairKey(attacker, target);
+                    if (!rangedHitsByPair.has(key)) {
+                        rangedHitsByPair.set(key, {
+                            key,
+                            score: combatPairScore(attacker, target),
+                            hits: []
+                        });
+                    }
+                    rangedHitsByPair.get(key).hits.push({ attacker, target });
+                });
             });
         });
-    });
+    }
 
     const rangedPairs = Array.from(rangedHitsByPair.values());
     sortCombatPairsByScore(rangedPairs);
@@ -1193,7 +1197,7 @@ function resolveStepCombat(meleePairsDone, rangedDone, roundLog, finishedMoveUid
         }
     });
 
-    // --- Melee pairs ---
+    // --- Melee pairs (still allowed mid-path when adjacent) ---
     const pendingPairs = [];
     const living = arenaParties.filter(ap => partyIsAlive(ap));
     for (let li = 0; li < living.length; li++) {
@@ -1256,7 +1260,8 @@ function truncatePlanFromStep(plan, stepIndex) {
     plan.path = plan.path.slice(0, stepIndex);
 }
 
-// Living enemy in an orthogonally adjacent tile? (same engagement rule as path planning)
+// Living enemy in an orthogonally adjacent tile (manhattan 1 only — NOT range 2).
+// Same engagement rule as path planning. Range-2 never cancels a path.
 function partyIsAdjacentToLivingEnemy(ap) {
     if (!partyIsAlive(ap) || typeof ap.x !== 'number') return false;
     return arenaParties.some(other =>
@@ -1268,7 +1273,7 @@ function partyIsAdjacentToLivingEnemy(ap) {
     );
 }
 
-// Once adjacent to an enemy, remaining path is cancelled — no walking through after the clash.
+// Melee contact only: cancel remaining path. Ranged (2 away) must NOT stop movement.
 function stopPlansEngagedWithEnemy(plans, fromStepIndex, roundLog) {
     plans.forEach(plan => {
         if (!partyIsAlive(plan.ap)) return;
@@ -1407,11 +1412,11 @@ function resolveSteppedMovementAndCombat(roundLog) {
         // Combat after each move step; also once when nobody moved (step 0 only).
         let combats = [];
         if (isMoveStep || movementSteps === 0) {
-            // Ranged only if this party has no further path left (finished moving this turn).
+            // Who has no further path left after this step (holds / short orders count as finished).
             const finishedMoveUids = new Set();
             plans.forEach(plan => {
                 if (!partyIsAlive(plan.ap)) return;
-                // path.length <= step+1 → no cells remain after this step (holds count as finished).
+                // path.length <= step+1 → no cells remain after this step.
                 if (plan.path.length <= step + 1) finishedMoveUids.add(plan.ap.uid);
             });
             // Hold-only round: everyone is "finished" (no one is mid-path).
@@ -1421,9 +1426,13 @@ function resolveSteppedMovementAndCombat(roundLog) {
                 });
             }
 
-            roundLog += `<br>⚔ After step ${isMoveStep ? step + 1 : 0}<br>`;
+            // Ranged only after the LAST walk step of the round (or hold-only).
+            // Stops "already at range 2 → shoot immediately" while other / longer paths still move.
+            const allowRanged = (movementSteps === 0) || (step === movementSteps - 1);
+
+            roundLog += `<br>⚔ After step ${isMoveStep ? step + 1 : 0}${allowRanged ? '' : ' (melee only)'}<br>`;
             const combatResult = resolveStepCombat(
-                meleePairsDone, rangedDone, roundLog, finishedMoveUids
+                meleePairsDone, rangedDone, roundLog, finishedMoveUids, allowRanged
             );
             combats = combatResult.combats || [];
             roundLog = combatResult.roundLog;
